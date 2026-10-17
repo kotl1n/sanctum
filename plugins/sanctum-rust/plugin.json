@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "sanctum-rust",
+  "version": "0.2.0",
+  "description": "Native companion for the separately configured Sanctum local gateway. Plugin installation alone does not redact traffic.",
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/hooks.json",
+      "interface": {
+        "displayName": "Sanctum Rust",
+        "shortDescription": "Local text privacy gateway companion",
+        "longDescription": "Native Rust session hook. Requires a separately configured and verified local gateway.",
+        "developerName": "Sanctum",
+        "category": "Developer Tools"
+      }
+    }
+  }
+}

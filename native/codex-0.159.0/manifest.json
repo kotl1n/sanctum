@@ -1,0 +1,19 @@
+{
+  "commit": "687a119f0fcaace47e1f1abcc77cec6c813fd6da",
+  "patch_sha256": "79606dde30517f077fe2c8b99cc95987873b62e705a954e5f20c1eb7b629971d",
+  "code_mode_host_sha256": "160c7ea08738447582821fbb2611ee016d6dd628853401bbc441767cb4e95ef8",
+  "files": {
+    "codex-rs/Cargo.lock": "84246c4979d04b853aeb738022ae07ee7c30f999bb665d7ef22dd7db0c3283a2",
+    "codex-rs/chatgpt/src/lib.rs": "f49c1ca91277c6c1cecdb1bf33627872e76453d488b9919a149d80278475a01a",
+    "codex-rs/cli/src/main.rs": "5633b75e0d8a561e7dd0e8833ee221b586e4e3ffbaf365fb708ec79a13ca71be",
+    "codex-rs/codex-api/src/endpoint/responses.rs": "5ef8b6777080ebe1709f683ee8e6818c0919fc548134a7ddc165574940bdcc6b",
+    "codex-rs/codex-api/src/endpoint/responses_websocket.rs": "f92c94be61a6f5025b272ca0c37e07d935150e0a67cbcdaedad66cd57e028d31",
+    "codex-rs/codex-api/src/lib.rs": "24997bcd86033d410c6565989c60ad7daef6745311e82772d24cd868438937b5",
+    "codex-rs/codex-api/src/sanctum_stream.rs": "6864e32c7936aedd0c7f99dfd95bba2c95e8a434e42d7e74530a06cae8335ec6",
+    "codex-rs/http-client/src/lib.rs": "5b6cb844655a37771516806c504d5d1e9b63683939530d847be4b366b3ddf343",
+    "codex-rs/http-client/src/request.rs": "e06bd4dc61b04873089ec62956cbb0f4296a20274c286cd0c6314a3a02cd040f",
+    "codex-rs/http-client/src/sanctum_http.rs": "b95b8c9ba64fc5a6c68d3d09ed71c82efa49b7a0763da9313eba145830c7958f",
+    "codex-rs/http-client/src/sanctum_http_tests.rs": "debd68a360f9293b020619b7f485b90ec8f79ac4c559c08f415417995ceb06c1",
+    "codex-rs/http-client/src/transport.rs": "a88da437626cfae6a5e0f95d21f7894dd6cbd7c1fe188450a074d000a0b77694"
+  }
+}

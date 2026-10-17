@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" check --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 30,
+            "statusMessage": "Sanctum: проверка промпта"
+          }
+        ]
+      }
+    ]
+  }
+}

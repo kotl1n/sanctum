@@ -1,0 +1,4 @@
+{
+  "literals": ["customer-internal.example", "SYNTHETIC-CUSTOM-SECRET"],
+  "max_entries": 10000
+}

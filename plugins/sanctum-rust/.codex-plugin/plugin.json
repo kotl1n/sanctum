@@ -1,0 +1,6 @@
+{
+  "name": "sanctum-rust",
+  "version": "0.2.0",
+  "description": "Native companion for the separately configured Sanctum local gateway.",
+  "hooks": "./hooks/hooks.json"
+}
