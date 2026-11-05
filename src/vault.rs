@@ -1,4 +1,3 @@
-//! Authenticated, per-session storage. Never exposes plaintext through a server.
 use crate::{
     Error, MAX_BODY, Result, json,
     redaction::{Policy, Redactor},
@@ -47,7 +46,7 @@ impl Vault {
         }
         let base = std::env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state")))
+            .or_else(|| crate::platform::home().ok().map(|p| p.join(".local/state")))
             .ok_or(Error("home_directory_unavailable"))?;
         Ok(base.join("sanctum"))
     }
@@ -59,7 +58,9 @@ impl Vault {
             match file.try_lock_exclusive() {
                 Ok(()) => return Ok(file),
                 Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
+                    if (e.kind() == std::io::ErrorKind::WouldBlock
+                        || (e.raw_os_error().is_some()
+                            && e.raw_os_error() == fs2::lock_contended_error().raw_os_error()))
                         && std::time::Instant::now() < until =>
                 {
                     std::thread::sleep(Duration::from_millis(10))
@@ -77,15 +78,21 @@ impl Vault {
             let mut key = Zeroizing::new(vec![0u8; 32]);
             getrandom::fill(&mut key).map_err(|_| Error("os_random_unavailable"))?;
             let mut file = private_create(&path)?;
-            file.write_all(&key)
+            #[cfg(windows)]
+            let stored = crate::windows::key_blob(&key, true)?;
+            #[cfg(not(windows))]
+            let stored = Zeroizing::new(key.to_vec());
+            file.write_all(&stored)
                 .and_then(|_| file.sync_all())
                 .map_err(|_| Error("vault_key_write_failed"))?;
         }
         let mut raw = Zeroizing::new(Vec::new());
         private_open(&path, false)?
-            .take(33)
+            .take(if cfg!(windows) { 65537 } else { 33 })
             .read_to_end(&mut raw)
             .map_err(|_| Error("vault_key_read_failed"))?;
+        #[cfg(windows)]
+        let raw = crate::windows::key_blob(&raw, false)?;
         if raw.len() != 32 {
             return Err(Error("invalid_vault_key"));
         }
@@ -125,7 +132,7 @@ impl Vault {
         );
         let saved = json::parse(&plaintext)?;
         let created = saved["created"].as_u64().ok_or(Error("invalid_snapshot"))?;
-        // Expired identifiers are never silently reassigned to other values.
+
         if now()?.saturating_sub(created) >= self.ttl {
             return Err(Error("vault_expired"));
         }
@@ -165,16 +172,18 @@ impl Vault {
                 .map_err(|_| Error("vault_write_failed"))?;
             fs::rename(&temp, self.directory.join(format!("{identity}.vault")))
                 .map_err(|_| Error("vault_commit_failed"))?;
+            #[cfg(unix)]
             File::open(&self.directory)
                 .and_then(|f| f.sync_all())
-                .map_err(|_| Error("vault_commit_failed"))
+                .map_err(|_| Error("vault_commit_failed"))?;
+            Ok(())
         })();
         if result.is_err() {
             let _ = fs::remove_file(temp);
         }
         result
     }
-    /// A transaction commits before its safe output may be returned to a caller.
+
     pub fn transact<T>(
         &self,
         session: &str,
@@ -242,7 +251,9 @@ fn private_directory(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|_| Error("state_directory_failed"))?;
     }
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    let mut builder = builder;
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -264,10 +275,10 @@ fn private_directory(path: &Path) -> Result<()> {
             return Err(Error("private_directory_required"));
         }
     }
-    #[cfg(not(unix))]
-    {
-        return Err(Error("vault_platform_unsupported"));
-    }
+    #[cfg(windows)]
+    crate::windows::protect_path(path)?;
+    #[cfg(not(any(unix, windows)))]
+    return Err(Error("vault_platform_unsupported"));
     Ok(())
 }
 fn private_create(path: &Path) -> Result<File> {
@@ -278,9 +289,15 @@ fn private_create(path: &Path) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options
+    let file = options
         .open(path)
-        .map_err(|_| Error("private_file_create_failed"))
+        .map_err(|_| Error("private_file_create_failed"))?;
+    #[cfg(windows)]
+    {
+        crate::windows::protect_path(path)?;
+        crate::windows::check_file(&file)?;
+    }
+    Ok(file)
 }
 fn private_open(path: &Path, create: bool) -> Result<File> {
     let mut options = OpenOptions::new();
@@ -292,9 +309,16 @@ fn private_open(path: &Path, create: bool) -> Result<File> {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let file = options
         .open(path)
         .map_err(|_| Error("vault_file_unavailable"))?;
+    #[cfg(windows)]
+    crate::windows::check_file(&file)?;
     let metadata = file
         .metadata()
         .map_err(|_| Error("vault_file_unavailable"))?;

@@ -11,3 +11,12 @@ sanctum.policy.local.json
 connection.json
 codex.fragment.toml
 /target/
+.env.*
+!.env.example
+*.vault
+master.key
+auth.json
+/.aws/
+/.codex/
+.DS_Store
+*.log

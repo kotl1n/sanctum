@@ -1,12 +1,12 @@
 {
   "name": "sanctum-prompt-guard",
-  "version": "0.1.0",
-  "description": "Check typed prompts locally on submission and block detected secrets. No gateway; protects typed prompt text only.",
+  "version": "1.0.0",
+  "description": "Устаревший пакет совместимости. Не проверяет, не блокирует и не маскирует запросы. Для защиты используйте Sanctum с проверенной серверной частью.",
   "hooks": "./hooks/hooks.json",
   "interface": {
-    "displayName": "Sanctum Prompt Guard",
-    "shortDescription": "Local checks before prompt submission",
-    "longDescription": "Native Rust UserPromptSubmit checker. Blocks detected IPs, emails and recognized secrets. Requires hook trust; does not replace text in the composer.",
+    "displayName": "Sanctum: совместимость без защиты",
+    "shortDescription": "Устаревшая совместимость; без фильтрации",
+    "longDescription": "Устаревший пакет совместимости без фильтрации приватных данных. Не устанавливает хуки. Для защиты используйте Sanctum с проверенной серверной частью.",
     "developerName": "Sanctum",
     "category": "Developer Tools"
   }

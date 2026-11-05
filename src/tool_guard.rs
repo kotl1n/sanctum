@@ -1,4 +1,3 @@
-//! Local tool boundary. Inputs are restored only for explicitly supported tools.
 use crate::{Error, Result, json, protocol::Session, redaction::Policy, vault::Vault};
 use serde_json::{Value, json as value};
 
@@ -14,21 +13,15 @@ pub fn handle_with_policy_path(
     let session = event["session_id"]
         .as_str()
         .ok_or(Error("session_id_required"))?;
+    if std::env::var_os("SANCTUM_CONTEXT_PROTECTION").is_some_and(|v| v == "1") {
+        return context_hook(event, session, policy, vault);
+    }
     match event["hook_event_name"].as_str() {
-        Some("UserPromptSubmit") => {
-            let text = event["prompt"].as_str().ok_or(Error("prompt_required"))?;
-            let safe = vault.mask(session, policy, &Value::String(text.into()))?;
-            // The bridge has already rewritten prompts. Direct clients retain
-            // a blocking guard instead of passing unsanitized prompts through.
-            if safe.as_str() == Some(text) {
-                Ok(None)
-            } else {
-                Ok(Some(
-                    value!({"decision":"block","reason":"Sanctum: отправка остановлена. Этот клиент передал исходный текст. Используйте запуск Sanctum без порта для автоматических замен."}),
-                ))
-            }
-        }
+        Some("UserPromptSubmit") => Ok(None),
         Some("PreToolUse") => {
+            if cfg!(windows) {
+                return Err(Error("windows_context_backend_required"));
+            }
             let name = event["tool_name"]
                 .as_str()
                 .ok_or(Error("tool_name_required"))?;
@@ -56,8 +49,6 @@ pub fn handle_with_policy_path(
             }
             let encoded = json::encode(input)?;
             if !supported.contains(&name) {
-                // Even an unknown tool without placeholders can return opaque
-                // content. This mode supports local text tools only.
                 return Err(Error("unsupported_tool_in_private_mode"));
             }
             if ["Bash", "bash", "exec_command", "shell_command", "shell"].contains(&name) {
@@ -155,8 +146,7 @@ pub fn handle_with_policy_path(
             if &safe == response {
                 return Ok(None);
             }
-            // continue:false can still expose the original to a running code
-            // script. A blocking result rejects that promise with safe text.
+
             let feedback =
                 serde_json::to_string(&safe).map_err(|_| Error("output_encode_failed"))?;
             Ok(Some(value!({"decision":"block","reason":feedback})))
@@ -164,8 +154,61 @@ pub fn handle_with_policy_path(
         _ => Err(Error("unexpected_hook_event")),
     }
 }
+
+pub fn context_hook(
+    event: &Value,
+    session: &str,
+    policy: Policy,
+    vault: &Vault,
+) -> Result<Option<Value>> {
+    if event["hook_event_name"] != "PreToolUse" {
+        return Ok(None);
+    }
+    let name = event["tool_name"].as_str().unwrap_or("");
+    let local = [
+        "Bash",
+        "bash",
+        "exec",
+        "exec_command",
+        "shell_command",
+        "shell",
+        "write_stdin",
+        "apply_patch",
+        "read_file",
+        "list_directory",
+        "grep_files",
+        "glob_files",
+    ];
+
+    if !local.contains(&name) {
+        return Ok(None);
+    }
+    let Some(input) = event.get("tool_input") else {
+        return Ok(None);
+    };
+    if crate::redaction::token_matches(&input.to_string())
+        .next()
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let restored = vault.transact(session, policy.clone(), |engine| {
+        let session = Session::new(crate::redaction::Redactor::from_snapshot(
+            policy,
+            &engine.snapshot(),
+        )?);
+        crate::local_arguments::restore(&session, input, name)
+    })?;
+    if restored == *input {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        value!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":restored}}),
+    ))
+}
 pub fn failure(event: Option<&Value>) -> Value {
-    let reason = "Sanctum: действие остановлено — локальная проверка или восстановление данных не выполнены. Исходные значения скрыты.";
+    let reason = "Sanctum: действие заблокировано из-за ошибки локальной проверки или восстановления данных. Исходные значения скрыты.";
     let _ = event;
     value!({"decision":"block","reason":reason})
 }

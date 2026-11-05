@@ -1,0 +1,16 @@
+Sanctum
+Copyright (C) 2026 Sanctum contributors
+SPDX-License-Identifier: GPL-3.0-only
+
+Sanctum is distributed under GNU GPL version 3 only. See LICENSE.
+
+The native backend patch targets OpenAI Codex, commit
+687a119f0fcaace47e1f1abcc77cec6c813fd6da (version 0.159.0).
+Upstream Codex is Copyright 2025 OpenAI, licensed under Apache-2.0.
+The patch was modified for Sanctum context filtering and local argument
+restoration. The upstream license and attribution notices are preserved in
+native/codex-0.159.0-context/UPSTREAM_LICENSE and UPSTREAM_NOTICE.
+Packaged native backends must also retain their own LICENSE and NOTICE.
+
+Third-party dependencies remain under their respective licenses. Sanctum
+is an independent project and is not an official OpenAI product.

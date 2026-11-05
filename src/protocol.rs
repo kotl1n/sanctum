@@ -81,8 +81,10 @@ impl Session {
         let mut saved = HashMap::new();
         self.inspect(&mut result, &mut saved, 0)?;
         self.redactor.reserve(&result)?;
-        let first = self.redactor.value(&result)?;
-        let mut result = self.redactor.value(&first)?;
+        crate::context::mask_data(&mut result, |data| {
+            let first = self.redactor.value(data)?;
+            self.redactor.value(&first)
+        })?;
         put_back(&mut result, &saved)?;
         result
             .as_object_mut()
@@ -262,9 +264,16 @@ impl Session {
 
 fn safe_code_literal(value: &str) -> bool {
     !value.is_empty()
-        && value
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_./:@%+,=-".contains(&c))
+        && (!cfg!(windows) || !value.starts_with('@'))
+        && value.bytes().all(|c| {
+            c.is_ascii_alphanumeric()
+                || (if cfg!(windows) {
+                    b"_./:@+,=-".as_slice()
+                } else {
+                    b"_./:@%+,=-".as_slice()
+                })
+                .contains(&c)
+        })
 }
 fn validate_tools(tools: &Value) -> Result<()> {
     for tool in tools.as_array().ok_or(Error("invalid_tools"))? {
@@ -277,32 +286,44 @@ fn validate_tools(tools: &Value) -> Result<()> {
     Ok(())
 }
 fn put_back(data: &mut Value, saved: &HashMap<String, String>) -> Result<()> {
-    match data {
-        Value::Object(map) => {
-            for (key, item) in map.iter_mut() {
-                if key == "encrypted_content" && !item.is_null() {
-                    *item = Value::String(
-                        saved
-                            .get(item.as_str().ok_or(Error("opaque_marker_changed"))?)
-                            .ok_or(Error("opaque_marker_changed"))?
-                            .clone(),
-                    );
-                } else {
-                    put_back(item, saved)?;
+    fn visit(
+        data: &mut Value,
+        saved: &HashMap<String, String>,
+        remaining: &mut HashSet<String>,
+    ) -> Result<()> {
+        match data {
+            Value::Object(map) => {
+                for (key, item) in map.iter_mut() {
+                    if key == "encrypted_content"
+                        && let Some(marker) = item.as_str()
+                        && let Some(original) = saved.get(marker)
+                    {
+                        if !remaining.remove(marker) {
+                            return Err(Error("opaque_marker_changed"));
+                        }
+                        *item = Value::String(original.clone());
+                    } else {
+                        visit(item, saved, remaining)?;
+                    }
                 }
             }
-        }
-        Value::Array(items) => {
-            for item in items {
-                put_back(item, saved)?;
+            Value::Array(items) => {
+                for item in items {
+                    visit(item, saved, remaining)?;
+                }
             }
+            _ => {}
         }
-        _ => {}
+        Ok(())
+    }
+    let mut remaining = saved.keys().cloned().collect();
+    visit(data, saved, &mut remaining)?;
+    if !remaining.is_empty() {
+        return Err(Error("opaque_marker_changed"));
     }
     Ok(())
 }
 
-/// One decoder per response, independent buffers for interleaved tool calls.
 #[derive(Default)]
 pub struct ResponseStream {
     names: HashMap<String, String>,

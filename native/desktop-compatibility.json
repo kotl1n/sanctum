@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "commit": "687a119f0fcaace47e1f1abcc77cec6c813fd6da",
+  "desktop": {
+    "usr/lib/chatgpt/ChatGPT": "cf634a3e875cc77a8352e7c937bc833b94b089a27f0378d67ee71c76c98c5568",
+    "usr/lib/chatgpt/resources/app.asar": "48975e18c86f395f330d53c872a65c4bc5c848993e6b36c63ba66f9c78338beb",
+    "usr/lib/chatgpt/resources/codex": "d2752c52353401f7f6efbfcea68796f4f7a3d3e4769f5d1da53fa49d4856b72f",
+    "usr/lib/chatgpt/resources/codex-code-mode-host": "160c7ea08738447582821fbb2611ee016d6dd628853401bbc441767cb4e95ef8",
+    "usr/lib/chatgpt/resources/cua_node/bin/node": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c"
+  },
+  "plugin": {},
+  "ui": {},
+  "backends": {},
+  "supported": {
+    "platform": "linux-x86_64",
+    "desktop_version": "26.928.20755",
+    "codex_version": "0.159.0",
+    "context_protocol": "sanctum-context-v2",
+    "policy": "Точные контрольные суммы компонентов Desktop; для других сборок нужны проверка и новый профиль.",
+    "plugin_version": "1.0.0",
+    "sanctum_crate_version": "1.0.0"
+  }
+}

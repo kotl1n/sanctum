@@ -1,4 +1,3 @@
-//! No network or disk access. Each vault belongs to one authenticated session.
 use crate::{Error, Result, json};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -10,7 +9,16 @@ use std::sync::OnceLock;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_DEPTH: usize = 64;
-const SECRET_NAME: &str = r"(?:password|passwd|pwd|passphrase|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|secret|пароль|токен)";
+const KEYWORDS: [&str; 3] = ["true", "false", "null"];
+fn keyword_index(text: &str) -> Option<usize> {
+    match text {
+        "true" => Some(0),
+        "false" => Some(1),
+        "null" => Some(2),
+        _ => None,
+    }
+}
+const SECRET_NAME: &str = r"(?:password|passwd|pwd|passphrase|(?:db|database|current|new|old|confirm)[_-]?password|password[_-]?(?:confirmation|confirm)|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|secret|пароль|токен)";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -115,8 +123,8 @@ fn detectors() -> &'static Detectors {
         let re = |s: &str| Regex::new(s).expect("static detector regex");
         Detectors {
             token: re(r"\[(?:IP|EMAIL|SECRET|KEY|PRIVATE_KEY|CUSTOM|PHONE|PERSON|DOCUMENT|DOMAIN|CARD)-[1-9][0-9]*\]"),
-            field: re(&format!(r"(?i)^(?:{SECRET_NAME})$")),
-            assignment: re(&format!(r#"(?i)(?:^|[^\w])(?:\w+_)?{SECRET_NAME}["']?\s*[:=]\s*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>[^\s,;"'&<>}}\]]+))"#)),
+            field: re(&format!(r"(?i)^(?:[a-z0-9]+[_-])*(?:{SECRET_NAME})$")),
+            assignment: re(&format!(r#"(?i)(?:^|[^\w])(?:\w+_)?{SECRET_NAME}(?:\\*["'])?\s*(?P<separator>[:=])[ \t]*"#)),
             email: re(r"[\w.!#$%&'*+/=?^`{|}~-]+@(?:[\w-]+\.)+[\w-]{2,}"),
             ipv4: re(r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"),
             ipv6: re(r"(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:.]*(?:%[\w.-]+)?"),
@@ -182,6 +190,10 @@ pub struct Redactor {
     policy: Policy,
     entries: Vec<Entry>,
     by_token: HashMap<String, usize>,
+    numeric_entities: HashMap<[u8; 32], usize>,
+    numeric_literals: HashSet<[u8; 32]>,
+    keyword_entities: [Option<usize>; 3],
+    keyword_literals: [bool; 3],
     reserved: HashSet<String>,
     counts: HashMap<Kind, usize>,
     patterns: Vec<Regex>,
@@ -190,6 +202,12 @@ pub struct Redactor {
 impl Redactor {
     pub fn new(policy: Policy) -> Result<Self> {
         policy.validate()?;
+        let mut numeric_literals = HashSet::new();
+        for literal in &policy.literals {
+            if let Some(key) = crate::numeric::fingerprint(literal) {
+                numeric_literals.insert(key);
+            }
+        }
         let patterns = policy
             .patterns
             .iter()
@@ -211,6 +229,7 @@ impl Redactor {
                 .map_err(|_| Error("invalid_domain"))?,
             )
         };
+        let keyword_literals = KEYWORDS.map(|word| policy.literals.iter().any(|s| s == word));
         Ok(Self {
             provider_opaque: HashSet::new(),
             patterns,
@@ -218,6 +237,10 @@ impl Redactor {
             policy,
             entries: Vec::new(),
             by_token: HashMap::new(),
+            numeric_entities: HashMap::new(),
+            numeric_literals,
+            keyword_entities: [None; 3],
+            keyword_literals,
             reserved: HashSet::new(),
             counts: HashMap::new(),
         })
@@ -231,6 +254,12 @@ impl Redactor {
                 return Err(Error("credential_capacity"));
             }
             self.policy.literals.push(literal.into());
+            if let Some(index) = keyword_index(literal) {
+                self.keyword_literals[index] = true;
+            }
+            if let Some(key) = crate::numeric::fingerprint(literal) {
+                self.numeric_literals.insert(key);
+            }
         }
         Ok(())
     }
@@ -250,7 +279,7 @@ impl Redactor {
             }
             Value::Object(map) => {
                 for (key, item) in map {
-                    self.reserve_text(key)?;
+                    self.reserve_inner(&Value::String(key.clone()), depth + 1)?;
                     self.reserve_inner(item, depth + 1)?;
                 }
             }
@@ -294,6 +323,14 @@ impl Redactor {
             }
         };
         self.by_token.insert(token.clone(), self.entries.len());
+        if let Some(key) = crate::numeric::fingerprint(original) {
+            self.numeric_entities
+                .entry(key)
+                .or_insert(self.entries.len());
+        }
+        if let Some(index) = keyword_index(original) {
+            self.keyword_entities[index].get_or_insert(self.entries.len());
+        }
         self.entries.push(Entry {
             kind,
             original: Zeroizing::new(original.into()),
@@ -301,9 +338,46 @@ impl Redactor {
         });
         Ok(token)
     }
+    fn numeric_token(&mut self, text: &str) -> Result<Option<String>> {
+        let Some(key) = crate::numeric::fingerprint(text) else {
+            return Ok(None);
+        };
+        if let Some(&index) = self.numeric_entities.get(&key) {
+            return self.token(self.entries[index].kind, text).map(Some);
+        }
+        if self.numeric_literals.contains(&key) {
+            return self.token(Kind::Custom, text).map(Some);
+        }
+        Ok(None)
+    }
+    fn keyword_token(&mut self, text: &str) -> Result<Option<String>> {
+        let Some(index) = keyword_index(text) else {
+            return Ok(None);
+        };
+        if let Some(entry) = self.keyword_entities[index] {
+            return self.token(self.entries[entry].kind, text).map(Some);
+        }
+        if self.keyword_literals[index]
+            || self
+                .patterns
+                .iter()
+                .any(|p| p.find(text).is_some_and(|m| !m.is_empty()))
+        {
+            return self.token(Kind::Custom, text).map(Some);
+        }
+        Ok(None)
+    }
     fn spans(&self, text: &str) -> Vec<Span> {
         let d = detectors();
         let mut candidates = Vec::new();
+        for (start, end) in crate::passwords::spans(text) {
+            candidates.push(Span {
+                start,
+                end,
+                kind: Kind::Secret,
+                priority: 5,
+            });
+        }
         for (kind, original) in self
             .entries
             .iter()
@@ -414,15 +488,21 @@ impl Redactor {
                 }
             }
         }
+        let mut assigned_until = 0;
         for captures in d.assignment.captures_iter(text) {
-            if let Some(m) = ["double", "single", "bare"]
-                .iter()
-                .find_map(|n| captures.name(n))
-                && !m.is_empty()
+            if let Some(head) = captures.get(0)
+                && head.start() >= assigned_until
+                && let Some((start, end)) = crate::assignment::value_span(
+                    text,
+                    head.start(),
+                    head.end(),
+                    captures.name("separator").map_or("", |m| m.as_str()),
+                )
             {
+                assigned_until = end;
                 candidates.push(Span {
-                    start: m.start(),
-                    end: m.end(),
+                    start,
+                    end,
                     kind: Kind::Secret,
                     priority: 2,
                 });
@@ -461,7 +541,6 @@ impl Redactor {
             if let Some(previous) = accepted.last_mut()
                 && candidate.start < previous.end
             {
-                // Union overlapping detections, never expose a secret suffix.
                 if candidate.end > previous.end {
                     if candidate.priority < previous.priority {
                         previous.kind = candidate.kind;
@@ -500,9 +579,15 @@ impl Redactor {
         Ok(result)
     }
     pub fn value(&mut self, value: &Value) -> Result<Value> {
-        self.value_inner(value, None, 0)
+        self.value_inner(value, None, 0, false)
     }
-    fn value_inner(&mut self, value: &Value, field: Option<&str>, depth: usize) -> Result<Value> {
+    fn value_inner(
+        &mut self,
+        value: &Value,
+        field: Option<&str>,
+        depth: usize,
+        key_source: bool,
+    ) -> Result<Value> {
         if depth > MAX_DEPTH {
             return Err(Error("nesting_limit"));
         }
@@ -515,10 +600,38 @@ impl Redactor {
                 {
                     return Ok(Value::String(self.token(kind, text)?));
                 }
-                if let Some(nested) = nested_json(text)? {
+                if let Some(token) = self.numeric_token(text)? {
+                    return Ok(Value::String(token));
+                }
+                if let Some(mut nested) = nested_json(text)? {
+                    let raw = if key_source || nested.is_string() {
+                        let raw = self.text(text)?;
+                        if raw != *text {
+                            if is_token(&raw) {
+                                return Ok(Value::String(raw));
+                            }
+
+                            nested = match nested_json(&raw) {
+                                Ok(Some(value)) => value,
+
+                                _ => return Ok(Value::String(self.token(Kind::Secret, text)?)),
+                            };
+                        }
+                        Some(raw)
+                    } else {
+                        None
+                    };
+                    let masked = self.value_inner(&nested, None, depth + 1, false)?;
+                    if let Some(raw) = raw {
+                        if masked == nested {
+                            return Ok(Value::String(raw));
+                        }
+                        let encoded =
+                            serde_json::to_string(&masked).map_err(|_| Error("invalid_json"))?;
+                        return Ok(Value::String(self.text(&encoded)?));
+                    }
                     return Ok(Value::String(
-                        serde_json::to_string(&self.value_inner(&nested, None, depth + 1)?)
-                            .map_err(|_| Error("invalid_json"))?,
+                        serde_json::to_string(&masked).map_err(|_| Error("invalid_json"))?,
                     ));
                 }
                 Ok(Value::String(self.text(text)?))
@@ -526,23 +639,67 @@ impl Redactor {
             Value::Number(n) if kind.is_some() => {
                 Ok(Value::String(self.token(kind.unwrap(), &n.to_string())?))
             }
+            Value::Number(n) => {
+                let text = n.to_string();
+                if let Some(token) = self.numeric_token(&text)? {
+                    return Ok(Value::String(token));
+                }
+
+                let kind = if self
+                    .patterns
+                    .iter()
+                    .any(|p| p.find(&text).is_some_and(|m| !m.is_empty()))
+                {
+                    Some(Kind::Custom)
+                } else if detectors().card.is_match(&text)
+                    && valid_card(&text)
+                    && text.bytes().all(|b| b.is_ascii_digit())
+                {
+                    Some(Kind::Card)
+                } else {
+                    None
+                };
+                match kind {
+                    Some(kind) => Ok(Value::String(self.token(kind, &text)?)),
+                    None => Ok(value.clone()),
+                }
+            }
+            Value::Bool(_) | Value::Null => {
+                let text = value.to_string();
+
+                if value.is_boolean()
+                    && let Some(kind) = field.and_then(boolean_field_kind)
+                {
+                    return Ok(Value::String(self.token(kind, &text)?));
+                }
+                match self.keyword_token(&text)? {
+                    Some(token) => Ok(Value::String(token)),
+                    None => Ok(value.clone()),
+                }
+            }
             Value::Array(items) => items
                 .iter()
-                .map(|v| self.value_inner(v, field, depth + 1))
+                .map(|v| self.value_inner(v, field, depth + 1, false))
                 .collect::<Result<Vec<_>>>()
                 .map(Value::Array),
             Value::Object(map) => {
                 let mut result = Map::new();
                 for (key, item) in map {
-                    let safe_key = self.text(key)?;
+                    let safe_key = self
+                        .value_inner(&Value::String(key.clone()), None, depth + 1, true)?
+                        .as_str()
+                        .ok_or(Error("invalid_masked_key"))?
+                        .to_owned();
                     if result.contains_key(&safe_key) {
                         return Err(Error("key_collision"));
                     }
-                    result.insert(safe_key, self.value_inner(item, Some(key), depth + 1)?);
+                    result.insert(
+                        safe_key,
+                        self.value_inner(item, Some(key), depth + 1, false)?,
+                    );
                 }
                 Ok(Value::Object(result))
             }
-            _ => Ok(value.clone()),
         }
     }
     pub fn restore(&self, text: &str) -> String {
@@ -563,10 +720,56 @@ impl Redactor {
     pub fn literal_token(&self, token: &str) -> bool {
         self.reserved.contains(token)
     }
+
+    pub fn visual_ranges_utf16(&self, text: &str) -> Vec<(usize, usize)> {
+        let spans = crate::visual_json::ranges(
+            text,
+            |source| {
+                if crate::numeric::fingerprint(source)
+                    .is_some_and(|key| self.numeric_entities.contains_key(&key))
+                {
+                    return vec![(0, source.len())];
+                }
+                let tokens: Vec<_> = detectors()
+                    .token
+                    .find_iter(source)
+                    .map(|m| (m.start(), m.end()))
+                    .collect();
+                self.spans(source)
+                    .into_iter()
+                    .filter(|span| {
+                        !tokens
+                            .iter()
+                            .any(|&(start, end)| start <= span.start && span.end <= end)
+                            && self.entries.iter().any(|entry| {
+                                entry.kind == span.kind
+                                    && entry.original.as_str() == &source[span.start..span.end]
+                            })
+                    })
+                    .map(|span| (span.start, span.end))
+                    .collect()
+            },
+            |source| {
+                crate::numeric::fingerprint(source)
+                    .is_some_and(|key| self.numeric_entities.contains_key(&key))
+                    || keyword_index(source).is_some_and(|i| self.keyword_entities[i].is_some())
+            },
+        );
+        let mut result = Vec::new();
+        let (mut byte_cursor, mut utf16_cursor) = (0, 0);
+        for (from, to) in spans {
+            utf16_cursor += text[byte_cursor..from].encode_utf16().count();
+            let start = utf16_cursor;
+            utf16_cursor += text[from..to].encode_utf16().count();
+            result.push((start, utf16_cursor));
+            byte_cursor = to;
+        }
+        result
+    }
     pub fn has_secrets(&self) -> bool {
         !self.entries.is_empty()
     }
-    /// Counts only; does not expose values, spans or a reversible mapping.
+
     pub fn finding_counts(&self) -> Vec<(&'static str, usize)> {
         [
             Kind::Ip,
@@ -677,6 +880,15 @@ impl Redactor {
                 .and_modify(|n| *n = (*n).max(index))
                 .or_insert(index);
             engine.by_token.insert(token.clone(), engine.entries.len());
+            if let Some(key) = crate::numeric::fingerprint(original) {
+                engine
+                    .numeric_entities
+                    .entry(key)
+                    .or_insert(engine.entries.len());
+            }
+            if let Some(index) = keyword_index(original) {
+                engine.keyword_entities[index].get_or_insert(engine.entries.len());
+            }
             engine.entries.push(Entry {
                 kind,
                 original: Zeroizing::new(original.into()),
@@ -696,13 +908,12 @@ impl Redactor {
 }
 
 fn nested_json(text: &str) -> Result<Option<Value>> {
-    if !text.trim_start().starts_with(['{', '[']) {
+    if !text.trim_start().starts_with(['{', '[', '"']) {
         return Ok(None);
     }
     match json::parse(text.as_bytes()) {
-        Ok(value @ (Value::Array(_) | Value::Object(_))) => Ok(Some(value)),
-        // Ordinary prose starting with brackets is still ordinary text. A JSON
-        // object with duplicate keys is rejected rather than reinterpreted.
+        Ok(value @ (Value::Array(_) | Value::Object(_) | Value::String(_))) => Ok(Some(value)),
+
         Err(_) if serde_json::from_str::<Value>(text).is_ok() => {
             Err(Error("ambiguous_embedded_json"))
         }
@@ -757,6 +968,20 @@ pub fn restore_mapping(text: &str, mapping: &Value) -> Result<String> {
                 .to_owned()
         })
         .into_owned())
+}
+
+fn boolean_field_kind(field: &str) -> Option<Kind> {
+    let lower = field.to_ascii_lowercase();
+    if ["has_", "has-", "is_", "is-"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return None;
+    }
+    match field_kind(field) {
+        Some(Kind::Secret) => Some(Kind::Secret),
+        _ => None,
+    }
 }
 
 fn field_kind(field: &str) -> Option<Kind> {

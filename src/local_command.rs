@@ -1,4 +1,3 @@
-//! Original shell data exists only in this process, never in tool arguments.
 use crate::{
     Error, MAX_BODY, Result, json,
     protocol::Session,
@@ -51,19 +50,67 @@ pub fn run_with_options(
             .ok_or(Error("command_required"))?
             .to_owned())
     })?);
-    let shell = shell
-        .map(str::to_owned)
-        .or_else(|| std::env::var("SHELL").ok())
-        .unwrap_or_else(|| "/bin/bash".into());
-    if !std::path::Path::new(&shell).is_absolute() {
-        return Err(Error("absolute_shell_path_required"));
-    }
-    let mut command = Command::new(shell);
-    command
-        .args([if login { "-lc" } else { "-c" }, &restored])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    #[cfg(not(windows))]
+    let mut command = {
+        let shell = shell
+            .map(str::to_owned)
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_else(|| "/bin/bash".into());
+        if !std::path::Path::new(&shell).is_absolute() {
+            return Err(Error("absolute_shell_path_required"));
+        }
+        let mut command = Command::new(shell);
+        command
+            .args([if login { "-lc" } else { "-c" }, &restored])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let shell = shell.map(std::path::PathBuf::from).unwrap_or_else(|| {
+            std::path::PathBuf::from(
+                std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()),
+            )
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe")
+        });
+        if !shell.is_absolute() {
+            return Err(Error("absolute_shell_path_required"));
+        }
+        let name = shell
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mut command = Command::new(&shell);
+        match name.as_str() {
+            "cmd.exe" => {
+                use std::os::windows::process::CommandExt;
+                command.args(["/D", "/V:OFF", "/S", "/C"]);
+                command.raw_arg(format!("\"{}\"", &*restored));
+            }
+            "powershell.exe" | "pwsh.exe" => {
+                if !login {
+                    command.arg("-NoProfile");
+                }
+                command.args([
+                    "-NonInteractive",
+                    "-Command",
+                    &format!(
+                        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); {}",
+                        &*restored
+                    ),
+                ]);
+            }
+            _ => return Err(Error("unsupported_windows_shell")),
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
     if let Some(encoded) = cwd_hex {
         let cwd = decode(encoded)?;
         let cwd = vault.transact(session, policy.clone(), |engine| {
@@ -89,12 +136,20 @@ pub fn run_with_options(
     let mut child = command
         .spawn()
         .map_err(|_| Error("local_command_start_failed"))?;
+    #[cfg(windows)]
+    let _tree = match crate::windows::ProcessTree::attach(&child) {
+        Ok(tree) => tree,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    #[cfg(unix)]
     let group = child.id();
     let stop = |child: &mut std::process::Child| {
         #[cfg(unix)]
         {
-            // SAFETY: group is the id of the private process group created
-            // immediately above for this subprocess, never a caller's pid.
             unsafe {
                 libc::kill(-(group as libc::pid_t), libc::SIGKILL);
             }

@@ -61,7 +61,6 @@ pub struct Settings {
     pub policy: Policy,
     pub restore_tools: bool,
     pub max_sessions: usize,
-    upstream: Option<String>,
 }
 impl Settings {
     pub fn new(key: String, mode: Mode, policy: Policy, restore_tools: bool) -> Result<Self> {
@@ -75,16 +74,7 @@ impl Settings {
             policy,
             restore_tools,
             max_sessions: 128,
-            upstream: None,
         })
-    }
-    /// Internal fixture support. No CLI argument or HTTP API can set upstream.
-    pub(crate) fn loopback_fixture(mut self, address: std::net::SocketAddr) -> Result<Self> {
-        if address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
-            return Err(Error("fixture_must_be_loopback"));
-        }
-        self.upstream = Some(format!("http://{address}{}", self.mode.prefix()));
-        Ok(self)
     }
 }
 struct App {
@@ -117,7 +107,7 @@ pub fn router(settings: Settings) -> Result<Router> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .https_only(settings.upstream.is_none())
+        .https_only(true)
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(120))
         .build()
@@ -345,11 +335,7 @@ async fn process(app: Arc<App>, request: Request) -> std::result::Result<Respons
         session_guard = Some(guard);
         outgoing_headers.insert("content-type", HeaderValue::from_static("application/json"));
     }
-    let upstream = app
-        .settings
-        .upstream
-        .as_deref()
-        .unwrap_or_else(|| app.settings.mode.upstream());
+    let upstream = app.settings.mode.upstream();
     let mut builder = app
         .client
         .request(method, format!("{upstream}{suffix}"))
@@ -458,7 +444,3 @@ async fn process(app: Arc<App>, request: Request) -> std::result::Result<Respons
         .insert("cache-control", HeaderValue::from_static("no-store"));
     Ok(response)
 }
-
-#[cfg(test)]
-#[path = "gateway_tests.rs"]
-mod tests;

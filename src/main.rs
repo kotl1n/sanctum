@@ -17,7 +17,7 @@ use zeroize::Zeroize;
 #[command(
     name = "sanctum",
     version,
-    about = "Local text privacy gateway and native Codex companion"
+    about = "Локальный шлюз защиты текста и нативный компаньон Codex"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -25,50 +25,52 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Read stdin and mask locally. A vault is saved only if explicitly requested.
+    /// Заменить приватные данные псевдонимами
     Redact {
-        #[arg(long)]
+        #[arg(long, help = "Файл политики распознавания")]
         policy: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Локальный файл незашифрованных соответствий JSON")]
         vault: Option<PathBuf>,
     },
-    /// Restore stdin locally using an explicitly saved PLAINTEXT vault.
+
+    /// Восстановить значения из локального файла соответствий
     Restore {
-        #[arg(long)]
+        #[arg(long, help = "Локальный файл незашифрованных соответствий JSON")]
         vault: PathBuf,
     },
-    /// Create private connection files without editing Codex settings.
+
+    /// Создать файлы подключения экспериментального HTTP-шлюза
     Prepare {
-        #[arg(long)]
+        #[arg(long, help = "Каталог файлов подключения")]
         directory: Option<PathBuf>,
-        #[arg(long, default_value_t = 47631)]
+        #[arg(long, default_value_t = 47631, help = "Локальный TCP-порт")]
         port: u16,
-        #[arg(long, value_enum, default_value_t = Mode::Chatgpt)]
+        #[arg(long, value_enum, default_value_t = Mode::Chatgpt, help = "Режим авторизации шлюза")]
         mode: Mode,
     },
-    /// Serve on 127.0.0.1. No remote bind or arbitrary upstream option exists.
+
+    /// Запустить экспериментальный локальный HTTP-шлюз
     Serve {
-        #[arg(long)]
+        #[arg(long, help = "Приватный файл подключения")]
         connection: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Файл политики распознавания")]
         policy: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Отключить восстановление аргументов инструментов")]
         no_restore_tools: bool,
     },
-    /// Package this binary with plugin manifests, native hook and local marketplace.
+
+    /// Создать пакет Rust-компаньона
     Package {
-        #[arg(long, default_value = "dist/sanctum-rust")]
+        #[arg(
+            long,
+            default_value = "dist/sanctum-rust",
+            help = "Новый каталог для пакета"
+        )]
         output: PathBuf,
     },
-    /// Fully offline synthetic gateway, tool execution and follow-up demonstration.
-    Demo,
-    /// Native SessionStart hook, used by the plugin.
+
+    /// Обработать начало сеанса Rust-компаньона
     SessionStart,
-    /// Optional blocking UserPromptSubmit hook; not enabled by the plugin.
-    PromptGuard {
-        #[arg(long)]
-        policy: Option<PathBuf>,
-    },
 }
 fn stdin_text() -> Result<String> {
     let mut buffer = Vec::new();
@@ -128,7 +130,7 @@ async fn run(command: Command) -> Result<()> {
             let directory = directory.map(Ok).unwrap_or_else(setup::default_directory)?;
             setup::prepare(&directory, port, mode)?;
             println!(
-                "Created private connection files in {}. Codex settings have not been changed.",
+                "Приватные файлы подключения созданы в {}. Настройки Codex не изменены.",
                 directory.display()
             );
         }
@@ -152,7 +154,7 @@ async fn run(command: Command) -> Result<()> {
                     .await
                     .map_err(|_| Error("loopback_bind_failed"))?;
             println!(
-                "Sanctum Rust listening on 127.0.0.1:{}; mode={}; text-only; tool restoration={}",
+                "Sanctum Rust: локальный адрес 127.0.0.1:{}; режим={}; только текст; восстановление аргументов={}",
                 connection.port,
                 connection.mode.label(),
                 !no_restore_tools
@@ -161,45 +163,25 @@ async fn run(command: Command) -> Result<()> {
         }
         Command::Package { output } => {
             setup::package(&output)?;
-            println!("Native plugin package created in {}", output.display());
+            println!("Пакет нативного плагина создан в {}", output.display());
         }
-        Command::Demo => sanctum::demo::run().await?,
         Command::SessionStart => {
-            // Consume input without ever emitting it as context or diagnostics.
             let mut input = stdin_text()?;
             input.zeroize();
             print_json(
-                &value!({"systemMessage":"Sanctum Rust companion loaded. Protection requires a separately configured and verified local gateway.","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"If the Sanctum gateway is active, identifiers such as [IP-1], [EMAIL-1], and [SECRET-1] are local privacy placeholders. Preserve them exactly in tool arguments. The gateway restores supported local tool arguments. Do not guess originals, encode placeholders, or read Sanctum connection files, vaults or process memory. Use structured local tool arguments for complex secrets. Text-only mode rejects attachments and hosted tools. Companion installation does not prove traffic is routed through the gateway."}}),
+                &value!({"systemMessage":"Компаньон Sanctum Rust загружен. Для защиты требуется отдельно настроенный и проверенный локальный шлюз.","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"If the Sanctum gateway is active, identifiers such as [IP-1], [EMAIL-1], and [SECRET-1] are local privacy placeholders. Preserve them exactly in tool arguments. The gateway restores supported local tool arguments. Do not guess originals, encode placeholders, or read Sanctum connection files, vaults or process memory. Use structured local tool arguments for complex secrets. Text-only mode rejects attachments and hosted tools. Companion installation does not prove traffic is routed through the gateway."}}),
             )?;
-        }
-        Command::PromptGuard { policy } => {
-            let inspect = || -> Result<bool> {
-                let payload = json::parse(stdin_text()?.as_bytes())?;
-                if payload["hook_event_name"] != "UserPromptSubmit" {
-                    return Err(Error("unexpected_hook"));
-                }
-                let prompt = payload["prompt"].as_str().ok_or(Error("prompt_required"))?;
-                let mut engine = Redactor::new(setup::load_policy(policy.as_deref())?)?;
-                engine.text(prompt)?;
-                Ok(engine.has_secrets())
-            };
-            match inspect() {
-                Ok(false) => {}
-                Ok(true) => print_json(
-                    &value!({"decision":"block","reason":"Sanctum detected sensitive text. Configure the local gateway or sanitize locally; original content omitted."}),
-                )?,
-                Err(_) => print_json(
-                    &value!({"decision":"block","reason":"Sanctum could not inspect this prompt. Request blocked; content omitted."}),
-                )?,
-            }
         }
     }
     Ok(())
 }
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run(Cli::parse().command).await {
-        eprintln!("Sanctum: {}. Input and credentials omitted.", error.0);
+    if let Err(error) = run(sanctum::cli::parse::<Cli>().command).await {
+        eprintln!(
+            "Sanctum: {}. Входные данные и учётные данные скрыты.",
+            error.0
+        );
         std::process::exit(1);
     }
 }

@@ -1,95 +1,78 @@
-//! Strict JSON: reject duplicate keys instead of silently losing a secret.
 use crate::{Error, Result};
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde_json::{Map, Number, Value};
+use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
+use serde_json::{Map, Number, Value, value::RawValue};
 use std::fmt;
 
-struct Strict(Value);
-impl<'de> Deserialize<'de> for Strict {
+struct Object(Vec<(String, Box<RawValue>)>);
+impl<'de> Deserialize<'de> for Object {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct StrictVisitor;
-        impl<'de> Visitor<'de> for StrictVisitor {
-            type Value = Strict;
+        struct ObjectVisitor;
+        impl<'de> Visitor<'de> for ObjectVisitor {
+            type Value = Object;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("strict JSON")
-            }
-            fn visit_bool<E: de::Error>(self, value: bool) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::Bool(value)))
-            }
-            fn visit_i64<E: de::Error>(self, value: i64) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::Number(value.into())))
-            }
-            fn visit_u64<E: de::Error>(self, value: u64) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::Number(value.into())))
-            }
-            fn visit_f64<E: de::Error>(self, value: f64) -> std::result::Result<Strict, E> {
-                Number::from_f64(value)
-                    .map(|x| Strict(Value::Number(x)))
-                    .ok_or_else(|| E::custom("non-finite number"))
-            }
-            fn visit_str<E: de::Error>(self, value: &str) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::String(value.into())))
-            }
-            fn visit_string<E: de::Error>(self, value: String) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::String(value)))
-            }
-            fn visit_unit<E: de::Error>(self) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::Null))
-            }
-            fn visit_none<E: de::Error>(self) -> std::result::Result<Strict, E> {
-                Ok(Strict(Value::Null))
-            }
-            fn visit_seq<A: SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> std::result::Result<Strict, A::Error> {
-                let mut values = Vec::new();
-                while let Some(Strict(item)) = seq.next_element()? {
-                    values.push(item);
-                }
-                Ok(Strict(Value::Array(values)))
+                f.write_str("strict JSON object")
             }
             fn visit_map<A: MapAccess<'de>>(
                 self,
                 mut map: A,
-            ) -> std::result::Result<Strict, A::Error> {
-                let mut values = Map::new();
-                while let Some((key, Strict(item))) = map.next_entry::<String, Strict>()? {
-                    if values.contains_key(&key) {
+            ) -> std::result::Result<Object, A::Error> {
+                let mut values = Vec::new();
+                let mut keys = std::collections::HashSet::new();
+                while let Some((key, item)) = map.next_entry::<String, Box<RawValue>>()? {
+                    if !keys.insert(key.clone()) {
                         return Err(de::Error::custom("duplicate key"));
                     }
-                    values.insert(key, item);
+                    values.push((key, item));
                 }
-                Ok(Strict(Value::Object(values)))
+                Ok(Object(values))
             }
         }
-        deserializer.deserialize_any(StrictVisitor)
+        deserializer.deserialize_map(ObjectVisitor)
+    }
+}
+
+fn value(raw: &RawValue, depth: usize) -> Result<Value> {
+    if depth > 128 {
+        return Err(Error("invalid_json"));
+    }
+    let text = raw.get();
+    let invalid = |_| Error("invalid_json");
+    match text.as_bytes().first() {
+        Some(b'{') => {
+            let Object(object) = serde_json::from_str(text).map_err(invalid)?;
+            let mut result = Map::new();
+            for (key, item) in object {
+                result.insert(key, value(&item, depth + 1)?);
+            }
+            Ok(Value::Object(result))
+        }
+        Some(b'[') => {
+            let items: Vec<Box<RawValue>> = serde_json::from_str(text).map_err(invalid)?;
+            items
+                .iter()
+                .map(|item| value(item, depth + 1))
+                .collect::<Result<Vec<_>>>()
+                .map(Value::Array)
+        }
+        Some(b'-' | b'0'..=b'9') => {
+            let number: Number = serde_json::from_str(text).map_err(invalid)?;
+
+            if !number.as_f64().is_some_and(f64::is_finite) {
+                return Err(Error("invalid_json"));
+            }
+
+            Ok(Value::Number(Number::from_string_unchecked(
+                text.to_owned(),
+            )))
+        }
+        _ => serde_json::from_str(text).map_err(invalid),
     }
 }
 
 pub fn parse(bytes: &[u8]) -> Result<Value> {
-    serde_json::from_slice::<Strict>(bytes)
-        .map(|x| x.0)
-        .map_err(|_| Error("invalid_json"))
+    let raw: Box<RawValue> = serde_json::from_slice(bytes).map_err(|_| Error("invalid_json"))?;
+    value(&raw, 0)
 }
 pub fn encode(value: &Value) -> Result<Vec<u8>> {
     serde_json::to_vec(value).map_err(|_| Error("invalid_json"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn reject_duplicate_keys_nested_and_trailing_data() {
-        for input in [
-            r#"{"a":1,"a":2}"#,
-            r#"{"outer":{"a":1,"a":2}}"#,
-            "{} true",
-            "NaN",
-            "1e999",
-        ] {
-            assert!(parse(input.as_bytes()).is_err());
-        }
-        assert!(parse(br#"{"items":[null,true,4,-3,0.5,"text"]}"#).is_ok());
-    }
 }

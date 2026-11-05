@@ -1,4 +1,3 @@
-//! Portless JSON-RPC stdin/stdout adapter. Does not change the model provider.
 use crate::{Error, MAX_BODY, Result, json, redaction::Policy, vault::Vault};
 use serde_json::{Value, json as value};
 use std::{
@@ -44,8 +43,7 @@ impl Filter {
                 .map_err(|_| Error("bridge_state_failed"))?
                 .remove(&key(&message["id"])?)
                 .ok_or(Error("unknown_backend_request"))?;
-            // This explicit routing-only callback carries account auth, not
-            // user/model context. Rewriting it would break subscription login.
+
             if session.is_empty() {
                 return Ok(message.clone());
             }
@@ -70,8 +68,7 @@ impl Filter {
                 let params = result["params"]
                     .as_object_mut()
                     .ok_or(Error("invalid_rpc_params"))?;
-                // Inspect fields together: a labelled secret in a later field
-                // must also hide its earlier unlabelled occurrence.
+
                 let instructions: serde_json::Map<String, Value> =
                     ["baseInstructions", "developerInstructions"]
                         .into_iter()
@@ -123,8 +120,7 @@ impl Filter {
                         Some("text") => {
                             let text = item["text"].as_str().ok_or(Error("text_required"))?;
                             let _ = text;
-                            // Composer annotations contain ranges/paths into
-                            // the original text, invalid after replacement.
+
                             if let Some(obj) = item.as_object_mut() {
                                 obj.remove("text_elements");
                                 obj.remove("textElements");
@@ -269,12 +265,11 @@ impl Filter {
         if self.native_boundary {
             return Ok(());
         }
-        // A hook cannot replace implicit startup context. Refuse detected data
-        // in instruction files rather than pretending it was masked.
+
         let mut paths = Vec::new();
         let home = std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|s| PathBuf::from(s).join(".codex")));
+            .or_else(|| crate::platform::home().ok().map(|s| s.join(".codex")));
         if let Some(home) = home {
             paths.push(home.join("AGENTS.md"));
             paths.push(home.join("AGENTS.override.md"));
@@ -380,7 +375,6 @@ pub async fn run(
     let mut backend = Command::new(executable);
     backend.args(args);
     if filter.native_boundary {
-        // Hosted search cannot execute behind the local tool boundary.
         backend.arg("-c").arg("web_search=\"disabled\"");
     }
     let mut child = backend

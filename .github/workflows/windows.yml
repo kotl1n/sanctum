@@ -1,0 +1,45 @@
+name: Проверка Windows
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo clippy --locked --all-targets --jobs 2 -- -D warnings
+      - run: cargo test --locked --all-targets --jobs 2
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - run: node --test tests/composer-host.test.cjs
+      - run: python scripts/build_release.py --jobs 2
+  wine:
+    name: Windows GNU в Docker и Wine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 scripts/test_windows_docker.py
+  windows-native:
+    name: Нативный патч на Windows MSVC
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4\n+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5\n+
+        with:
+          python-version: '3.11'
+      - run: python scripts/build_native_backend.py --prepare-only
+      - run: cargo +stable check --manifest-path target/codex-native/source/codex-rs/Cargo.toml --locked -p codex-cli --bin codex --jobs 2

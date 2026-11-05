@@ -1,0 +1,20 @@
+{
+  "name": "sanctum-portless",
+  "version": "1.0.0",
+  "description": "Локальное маскирование текста и зашифрованные псевдонимы для каждого чата Codex Desktop. Требуются запуск через Sanctum и проверенная серверная часть.",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Sanctum",
+    "shortDescription": "Локальная защита приватных данных",
+    "longDescription": "Sanctum заменяет приватный текст локальными псевдонимами. Зашифрованные соответствия остаются на вашем устройстве и восстанавливаются для поддерживаемых локальных инструментов. Для защиты запускайте ChatGPT через Sanctum с совместимой серверной частью.",
+    "developerName": "Sanctum",
+    "category": "Developer Tools",
+    "brandColor": "#252C26",
+    "brandColorDark": "#EEECE4",
+    "composerIcon": "./assets/composer-icon.svg",
+    "logo": "./assets/logo.svg",
+    "screenshots": [
+      "./assets/cover.png"
+    ]
+  }
+}

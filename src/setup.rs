@@ -28,9 +28,7 @@ pub fn random_key() -> Result<String> {
     Ok(key)
 }
 pub fn default_directory() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(|p| PathBuf::from(p).join(".config/sanctum-rust"))
-        .ok_or(Error("home_directory_unavailable"))
+    Ok(crate::platform::home()?.join(".config/sanctum-rust"))
 }
 pub fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = OpenOptions::new();
@@ -43,6 +41,8 @@ pub fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = options
         .open(path)
         .map_err(|_| Error("private_file_create_failed"))?;
+    #[cfg(windows)]
+    crate::windows::protect_path(path)?;
     file.write_all(bytes)
         .map_err(|_| Error("private_file_write_failed"))
 }
@@ -123,7 +123,7 @@ pub fn prepare(directory: &Path, port: u16, mode: Mode) -> Result<()> {
         Mode::Openai => "env_key = \"OPENAI_API_KEY\"",
     };
     let mut fragment = format!(
-        "# Experimental Sanctum Rust provider. Contains a LOCAL credential; keep private.\nmodel_provider = \"sanctum_rust\"\nweb_search = \"disabled\"\n\n[model_providers.sanctum_rust]\nname = \"Sanctum Rust local\"\nbase_url = \"http://127.0.0.1:{port}{}\"\nwire_api = \"responses\"\n{auth}\nsupports_websockets = false\nhttp_headers = {{ \"X-Sanctum-Key\" = \"{}\" }}\n",
+        "# Экспериментальный провайдер Sanctum Rust. Содержит ЛОКАЛЬНЫЙ ключ; храните приватно.\nmodel_provider = \"sanctum_rust\"\nweb_search = \"disabled\"\n\n[model_providers.sanctum_rust]\nname = \"Sanctum Rust: локальный шлюз\"\nbase_url = \"http://127.0.0.1:{port}{}\"\nwire_api = \"responses\"\n{auth}\nsupports_websockets = false\nhttp_headers = {{ \"X-Sanctum-Key\" = \"{}\" }}\n",
         mode.prefix(),
         connection.local_key
     );
@@ -132,7 +132,6 @@ pub fn prepare(directory: &Path, port: u16, mode: Mode) -> Result<()> {
     let result = (|| {
         private_write(&state, &serialized)?;
         if let Err(error) = private_write(&config, fragment.as_bytes()) {
-            // Only remove the state file created successfully by this call.
             let _ = fs::remove_file(&state);
             return Err(error);
         }
@@ -176,14 +175,21 @@ pub fn package(output: &Path) -> Result<()> {
                 output.join(".agents/plugins/marketplace.json"),
                 "{\"name\":\"sanctum-rust-dev\",\"interface\":{\"displayName\":\"Sanctum Rust\"},\"plugins\":[{\"name\":\"sanctum-rust\",\"source\":{\"source\":\"local\",\"path\":\"./plugin\"},\"policy\":{\"installation\":\"AVAILABLE\",\"authentication\":\"ON_INSTALL\"},\"category\":\"Developer Tools\"}]}\n",
             ),
-            (
-                output.join("README.txt"),
-                "Sanctum Rust 0.2.0. Native Linux plugin companion and local gateway. Installing this plugin alone does not route model traffic. Run plugin/bin/sanctum prepare and serve; read the repository README for activation, limitations and rollback. Desktop subscription support is experimental. Built for the host architecture.\n",
-            ),
         ] {
             fs::write(path, contents).map_err(|_| Error("package_write_failed"))?;
         }
-        let binary = plugin.join("bin/sanctum");
+        #[cfg(windows)]
+        {
+            let hooks = serde_json::json!({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":r#""%CODEX_PLUGIN_ROOT%/bin/sanctum.exe" session-start"#,"timeout":5}]}]}});
+            fs::write(
+                plugin.join("hooks/hooks.json"),
+                serde_json::to_vec_pretty(&hooks).map_err(|_| Error("package_encode_failed"))?,
+            )
+            .map_err(|_| Error("package_write_failed"))?;
+        }
+        let binary = plugin
+            .join("bin")
+            .join(crate::platform::executable("sanctum"));
         fs::copy(executable, &binary).map_err(|_| Error("package_binary_copy_failed"))?;
         #[cfg(unix)]
         {
@@ -199,7 +205,6 @@ pub fn package(output: &Path) -> Result<()> {
     result
 }
 
-/// A separate native binary and plugin: no gateway setup or SessionStart hook.
 pub fn package_prompt_guard(output: &Path) -> Result<()> {
     let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -217,8 +222,6 @@ pub fn package_prompt_guard(output: &Path) -> Result<()> {
             fs::create_dir_all(dir).map_err(|_| Error("package_directory_failed"))?;
         }
         for (path, contents) in [
-            // Codex 0.153.4 ignores bundled hooks when a portable root manifest
-            // is present. Ship the verified compatibility-only layout here.
             (
                 plugin.join(".codex-plugin/plugin.json"),
                 include_str!("../plugins/sanctum-prompt-guard/.codex-plugin/plugin.json"),
@@ -233,16 +236,14 @@ pub fn package_prompt_guard(output: &Path) -> Result<()> {
             ),
             (
                 output.join(".agents/plugins/marketplace.json"),
-                "{\"name\":\"sanctum-guard-dev\",\"interface\":{\"displayName\":\"Sanctum Prompt Guard\"},\"plugins\":[{\"name\":\"sanctum-prompt-guard\",\"source\":{\"source\":\"local\",\"path\":\"./plugin\"},\"policy\":{\"installation\":\"AVAILABLE\",\"authentication\":\"ON_INSTALL\"},\"category\":\"Developer Tools\"}]}\n",
-            ),
-            (
-                output.join("README.txt"),
-                include_str!("../plugins/sanctum-prompt-guard/README.txt"),
+                "{\"name\":\"sanctum-guard-dev\",\"interface\":{\"displayName\":\"Sanctum: совместимость без защиты\"},\"plugins\":[{\"name\":\"sanctum-prompt-guard\",\"source\":{\"source\":\"local\",\"path\":\"./plugin\"},\"policy\":{\"installation\":\"AVAILABLE\",\"authentication\":\"ON_INSTALL\"},\"category\":\"Developer Tools\"}]}\n",
             ),
         ] {
             fs::write(path, contents).map_err(|_| Error("package_write_failed"))?;
         }
-        let binary = plugin.join("bin/sanctum-guard");
+        let binary = plugin
+            .join("bin")
+            .join(crate::platform::executable("sanctum-guard"));
         fs::copy(executable, &binary).map_err(|_| Error("package_binary_copy_failed"))?;
         #[cfg(unix)]
         {
@@ -258,13 +259,12 @@ pub fn package_prompt_guard(output: &Path) -> Result<()> {
     result
 }
 
-/// Separate opt-in portless package; preserves the installed submit-only guard.
 pub fn package_portless(output: &Path) -> Result<()> {
     let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
     let adapter = executable
         .parent()
         .ok_or(Error("binary_location_failed"))?
-        .join("sanctum-codex");
+        .join(crate::platform::executable("sanctum-codex"));
     if !adapter.is_file() {
         return Err(Error("build_sanctum_codex_first"));
     }
@@ -282,13 +282,20 @@ pub fn package_portless(output: &Path) -> Result<()> {
         ] {
             fs::create_dir_all(dir).map_err(|_| Error("package_directory_failed"))?;
         }
-        let manifest = serde_json::json!({"name":"sanctum-portless","version":"0.1.0","description":"Portless stdio prompt masking and local tool privacy hooks. Requires Sanctum launcher.","hooks":"./hooks/hooks.json","interface":{"displayName":"Sanctum Portless","shortDescription":"Local aliases without a TCP listener","developerName":"Sanctum","category":"Developer Tools"}});
-        let command = "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"";
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../plugins/sanctum-portless/.codex-plugin/plugin.json"
+        ))
+        .map_err(|_| Error("package_encode_failed"))?;
+        let command = if cfg!(windows) {
+            r#""%CODEX_PLUGIN_ROOT%/bin/sanctum-guard.exe" hook --policy "%CODEX_PLUGIN_ROOT%/policy.json""#
+        } else {
+            "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\""
+        };
         let mut hooks = serde_json::Map::new();
         for event in ["UserPromptSubmit", "PreToolUse", "PostToolUse"] {
             hooks.insert(event.into(),serde_json::json!([{"hooks":[{"type":"command","command":command,"timeout":30,"statusMessage":"Sanctum: локальная обработка данных"}]}]));
         }
-        let marketplace = serde_json::json!({"name":"sanctum-portless-dev","interface":{"displayName":"Sanctum Portless local"},"plugins":[{"name":"sanctum-portless","source":{"source":"local","path":"./plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Developer Tools"}]});
+        let marketplace = serde_json::json!({"name":"sanctum-portless-dev","interface":{"displayName":"Sanctum: локальная защита"},"plugins":[{"name":"sanctum-portless","source":{"source":"local","path":"./plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Developer Tools"}]});
         for (path, data) in [
             (plugin.join(".codex-plugin/plugin.json"), manifest),
             (
@@ -308,7 +315,7 @@ pub fn package_portless(output: &Path) -> Result<()> {
             .map_err(|_| Error("package_write_failed"))?;
         }
         for (source, name) in [(executable, "sanctum-guard"), (adapter, "sanctum-codex")] {
-            let destination = plugin.join("bin").join(name);
+            let destination = plugin.join("bin").join(crate::platform::executable(name));
             fs::copy(source, &destination).map_err(|_| Error("package_binary_copy_failed"))?;
             #[cfg(unix)]
             {
@@ -317,11 +324,45 @@ pub fn package_portless(output: &Path) -> Result<()> {
                     .map_err(|_| Error("package_binary_mode_failed"))?;
             }
         }
-        fs::write(
-            output.join("README.txt"),
-            include_str!("../docs/PORTLESS.md"),
-        )
-        .map_err(|_| Error("package_write_failed"))?;
+        let ui = plugin.join("ui");
+        fs::create_dir(&ui).map_err(|_| Error("package_directory_failed"))?;
+        for (name, contents) in [
+            ("composer.js", include_str!("../ui/composer.js")),
+            ("cli_text.py", include_str!("../scripts/cli_text.py")),
+            (
+                "platform_support.py",
+                include_str!("../scripts/platform_support.py"),
+            ),
+            (
+                "manage_backend.py",
+                include_str!("../scripts/manage_backend.py"),
+            ),
+            ("composer-host.cjs", include_str!("../ui/composer-host.cjs")),
+        ] {
+            fs::write(ui.join(name), contents).map_err(|_| Error("package_write_failed"))?;
+        }
+        let assets = plugin.join("assets");
+        fs::create_dir(&assets).map_err(|_| Error("package_directory_failed"))?;
+        for (name, contents) in [
+            (
+                "cover.png",
+                include_bytes!("../plugins/sanctum-portless/assets/cover.png").as_slice(),
+            ),
+            (
+                "cover.svg",
+                include_bytes!("../plugins/sanctum-portless/assets/cover.svg").as_slice(),
+            ),
+            (
+                "logo.svg",
+                include_bytes!("../plugins/sanctum-portless/assets/logo.svg").as_slice(),
+            ),
+            (
+                "composer-icon.svg",
+                include_bytes!("../plugins/sanctum-portless/assets/composer-icon.svg").as_slice(),
+            ),
+        ] {
+            fs::write(assets.join(name), contents).map_err(|_| Error("package_write_failed"))?;
+        }
         Ok(())
     })();
     if result.is_err() {

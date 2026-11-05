@@ -1,6 +1,0 @@
-{
-  "name": "sanctum-local",
-  "version": "0.1.0",
-  "description": "Companion for the separately configured Sanctum gateway; installation alone does not redact traffic.",
-  "hooks": "./hooks/hooks.json"
-}
