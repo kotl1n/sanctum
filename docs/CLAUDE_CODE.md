@@ -1,6 +1,6 @@
 # Sanctum для Claude Code
 
-Плагин `sanctum-claude` защищает приватные данные в Claude Code только через хуки. Он не запускает прокси, не открывает сетевой порт и не меняет `ANTHROPIC_BASE_URL`. Нужна версия Claude Code с полем `updatedToolOutput` для PostToolUse и с `asyncRewake` для хуков; проверено на 2.1.309.
+Плагин `sanctum-privacy` защищает приватные данные в Claude Code только через хуки. Он не запускает прокси, не открывает сетевой порт и не меняет `ANTHROPIC_BASE_URL`. Нужна версия Claude Code с полем `updatedToolOutput` для PostToolUse и с `asyncRewake` для хуков; проверено на 2.1.309.
 
 ## Как это работает
 
@@ -20,14 +20,14 @@
 
 ```sh
 cargo build --release --locked --bin sanctum-guard
-target/release/sanctum-guard package-claude --output dist/sanctum-claude
+target/release/sanctum-guard package-claude --output dist/sanctum-privacy
 ```
 
-Каталог содержит маркетплейс `sanctum-local` с плагином `sanctum-claude`. В Claude Code выполните:
+Каталог содержит маркетплейс `sanctum-local` с плагином `sanctum-privacy`. В готовом комплекте релиза тот же каталог лежит в `claude/`. В Claude Code выполните:
 
 ```
-/plugin marketplace add /абсолютный/путь/dist/sanctum-claude
-/plugin install sanctum-claude@sanctum-local
+/plugin marketplace add /абсолютный/путь/dist/sanctum-privacy
+/plugin install sanctum-privacy@sanctum-local
 ```
 
 Политика распознавания лежит в `plugin/policy.json`. Переменная `SANCTUM_GUARD_POLICY` её переопределяет. Защиту выключает `sanctum-guard settings --enabled false`; это общая настройка с Desktop.

@@ -253,3 +253,64 @@ fn mentioned_files_with_private_data_are_not_attached() {
     assert!(hook(temp.path(), event("check @notes.md please")).is_none());
     assert!(hook(temp.path(), event("check @missing.env please")).is_none());
 }
+
+#[test]
+fn claude_package_is_a_complete_local_marketplace() {
+    let directory = support::TempDir::new();
+    let output = directory.path().join("claude");
+    let result = Command::new(support::binary(env!("CARGO_BIN_EXE_sanctum-guard")))
+        .args(["package-claude", "--output", output.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let read = |path: &str| -> Value {
+        serde_json::from_slice(&std::fs::read(output.join(path)).unwrap()).unwrap()
+    };
+    let marketplace = read(".claude-plugin/marketplace.json");
+    assert_eq!(marketplace["plugins"][0]["name"], "sanctum-privacy");
+    assert_eq!(marketplace["plugins"][0]["source"], "./plugin");
+    assert_eq!(marketplace["plugins"][0]["version"], sanctum::VERSION);
+    let manifest = read("plugin/.claude-plugin/plugin.json");
+    assert_eq!(manifest["name"], "sanctum-privacy");
+    assert_eq!(manifest["version"], sanctum::VERSION);
+    let hooks = read("plugin/hooks/hooks.json");
+    for event in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "MessageDisplay",
+    ] {
+        for hook in hooks["hooks"][event][0]["hooks"].as_array().unwrap() {
+            assert!(
+                hook["command"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook")
+            );
+        }
+    }
+    assert!(
+        hooks["hooks"]["UserPromptSubmit"][0]["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hook| hook["asyncRewake"] == true)
+    );
+    let readme = std::fs::read_to_string(output.join("plugin/README.md")).unwrap();
+    assert!(readme.contains("](docs/CLAUDE_CODE.md)"));
+    assert!(output.join("plugin/docs/CLAUDE_CODE.md").is_file());
+    assert!(output.join("plugin/.claude-plugin/icon.png").is_file());
+    let binary = output
+        .join("plugin/bin")
+        .join(sanctum::platform::executable("sanctum-guard"));
+    let version = Command::new(support::binary(binary.to_str().unwrap()))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&version.stdout).contains(sanctum::VERSION));
+}

@@ -95,7 +95,7 @@ python3 dist/sanctum-1.0.0/install.py rollback --transaction transaction-EXAMPLE
 
 ## Claude Code
 
-Плагин `sanctum-claude` работает в Claude Code только через хуки, без прокси и сетевого порта. Модель получает псевдонимы вместо приватных данных в запросах и выводе инструментов, а локальные инструменты работают с исходными значениями. Сборка: `sanctum-guard package-claude --output dist/sanctum-claude`, затем `/plugin marketplace add` и `/plugin install sanctum-claude@sanctum-local`. Подробности и ограничения: [Sanctum для Claude Code](docs/CLAUDE_CODE.md).
+Плагин `sanctum-privacy` работает в Claude Code только через хуки, без прокси и сетевого порта. Модель получает псевдонимы вместо приватных данных в запросах и выводе инструментов, а локальные инструменты работают с исходными значениями. Сборка: `sanctum-guard package-claude --output dist/sanctum-privacy`, затем `/plugin marketplace add` и `/plugin install sanctum-privacy@sanctum-local`. Подробности и ограничения: [Sanctum для Claude Code](docs/CLAUDE_CODE.md).
 
 ## Другие компоненты
 

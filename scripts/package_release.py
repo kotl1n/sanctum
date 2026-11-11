@@ -75,6 +75,9 @@ def package(backend, output, native_source=None, profile_path=None):
         packaged_version = load(output / 'plugin/.codex-plugin/plugin.json')['version']
         if packaged_version != version:
             raise ValueError('packaged_plugin_version_mismatch')
+        subprocess.run([str(ROOT / 'target/release' / executable('sanctum-guard')), 'package-claude', '--output', str(output / 'claude')], check=True)
+        if load(output / 'claude/plugin/.claude-plugin/plugin.json')['version'] != version:
+            raise ValueError('packaged_claude_plugin_version_mismatch')
         for name in ('LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md'):
             shutil.copy2(ROOT / name, output / name)
         for name in ('docs', 'examples', 'native'):

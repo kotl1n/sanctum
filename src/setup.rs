@@ -271,29 +271,45 @@ pub fn package_claude(output: &Path) -> Result<()> {
             plugin.join(".claude-plugin"),
             plugin.join("hooks"),
             plugin.join("bin"),
+            plugin.join("docs"),
             output.join(".claude-plugin"),
         ] {
             fs::create_dir_all(dir).map_err(|_| Error("package_directory_failed"))?;
         }
         let manifest: serde_json::Value = serde_json::from_str(include_str!(
-            "../plugins/sanctum-claude/.claude-plugin/plugin.json"
+            "../plugins/sanctum-privacy/.claude-plugin/plugin.json"
         ))
         .map_err(|_| Error("package_encode_failed"))?;
         let marketplace = serde_json::json!({"name":"sanctum-local","owner":{"name":"Sanctum"},
-            "plugins":[{"name":"sanctum-claude","source":"./plugin","description":manifest["description"],
+            "description":"Локальная сборка Sanctum: защита приватных данных в Claude Code без прокси.",
+            "plugins":[{"name":"sanctum-privacy","source":"./plugin","description":manifest["description"],
                 "version":crate::VERSION,"category":"security"}]});
         for (path, data) in [
             (
                 plugin.join("hooks/hooks.json"),
-                include_str!("../plugins/sanctum-claude/hooks/hooks.json"),
+                include_str!("../plugins/sanctum-privacy/hooks/hooks.json"),
             ),
             (
                 plugin.join(".claude-plugin/plugin.json"),
-                include_str!("../plugins/sanctum-claude/.claude-plugin/plugin.json"),
+                include_str!("../plugins/sanctum-privacy/.claude-plugin/plugin.json"),
+            ),
+            (
+                plugin.join("README.md"),
+                &include_str!("../plugins/sanctum-privacy/README.md")
+                    .replace("../../docs/CLAUDE_CODE.md", "docs/CLAUDE_CODE.md"),
+            ),
+            (
+                plugin.join("docs/CLAUDE_CODE.md"),
+                include_str!("../docs/CLAUDE_CODE.md"),
             ),
         ] {
             fs::write(path, data).map_err(|_| Error("package_write_failed"))?;
         }
+        fs::write(
+            plugin.join(".claude-plugin/icon.png"),
+            include_bytes!("../plugins/sanctum-privacy/.claude-plugin/icon.png"),
+        )
+        .map_err(|_| Error("package_write_failed"))?;
         for (path, data) in [
             (
                 plugin.join("policy.json"),

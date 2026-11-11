@@ -108,7 +108,7 @@ enum Command {
     PackageClaude {
         #[arg(
             long,
-            default_value = "dist/sanctum-claude",
+            default_value = "dist/sanctum-privacy",
             help = "Новый каталог для пакета"
         )]
         output: PathBuf,
