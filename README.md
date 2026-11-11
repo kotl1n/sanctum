@@ -99,7 +99,7 @@ python3 dist/sanctum-1.0.0/install.py rollback --transaction transaction-EXAMPLE
 
 ## Другие компоненты
 
-Исполняемый файл `sanctum` содержит экспериментальный локальный HTTP-шлюз (`prepare`, `serve`) и пакет Rust-компаньона. Шлюз настраивается отдельно от stdio-режима Desktop. Основная интеграция Desktop — `sanctum-portless` с проверенной нативной серверной частью.
+Исполняемый файл `sanctum` содержит только команды `redact` и `restore` для маскирования текста из стандартного ввода (см. «Проверка без Desktop»). Sanctum не открывает сетевых портов: интеграция Desktop — `sanctum-portless` с проверенной нативной серверной частью, интеграция Claude Code — плагин `sanctum-privacy`.
 
 ## Язык и лицензия
 

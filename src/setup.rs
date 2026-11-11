@@ -1,24 +1,10 @@
-use crate::{Error, MAX_BODY, Result, gateway::Mode, json, redaction::Policy};
-use serde::{Deserialize, Serialize};
+use crate::{Error, MAX_BODY, Result, json, redaction::Policy};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 use zeroize::Zeroize;
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Connection {
-    pub local_key: String,
-    pub port: u16,
-    pub mode: Mode,
-}
-impl Drop for Connection {
-    fn drop(&mut self) {
-        self.local_key.zeroize();
-    }
-}
 
 pub fn random_key() -> Result<String> {
     let mut bytes = [0u8; 32];
@@ -26,9 +12,6 @@ pub fn random_key() -> Result<String> {
     let key = bytes.iter().map(|b| format!("{b:02x}")).collect();
     bytes.zeroize();
     Ok(key)
-}
-pub fn default_directory() -> Result<PathBuf> {
-    Ok(crate::platform::home()?.join(".config/sanctum-rust"))
 }
 pub fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = OpenOptions::new();
@@ -57,31 +40,6 @@ fn read_file(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-pub fn load_connection(path: &Path) -> Result<Connection> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(path)
-            .map_err(|_| Error("connection_unavailable"))?
-            .permissions()
-            .mode()
-            & 0o077
-            != 0
-        {
-            return Err(Error("connection_must_be_private"));
-        }
-    }
-    let mut raw = read_file(path)?;
-    let result = json::parse(&raw).and_then(|v| {
-        serde_json::from_value::<Connection>(v).map_err(|_| Error("invalid_connection"))
-    });
-    raw.zeroize();
-    let connection = result?;
-    if connection.port == 0 {
-        return Err(Error("invalid_port"));
-    }
-    Ok(connection)
-}
 pub fn load_policy(path: Option<&Path>) -> Result<Policy> {
     let Some(path) = path else {
         return Ok(Policy::default());
@@ -94,117 +52,6 @@ pub fn load_policy(path: Option<&Path>) -> Result<Policy> {
     policy.validate()?;
     Ok(policy)
 }
-pub fn prepare(directory: &Path, port: u16, mode: Mode) -> Result<()> {
-    if port == 0 {
-        return Err(Error("invalid_port"));
-    }
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(directory)
-        .map_err(|_| Error("state_directory_failed"))?;
-    let state = directory.join("connection.json");
-    let config = directory.join("codex.fragment.toml");
-    if state.symlink_metadata().is_ok() || config.symlink_metadata().is_ok() {
-        return Err(Error("setup_already_exists"));
-    }
-    let connection = Connection {
-        local_key: random_key()?,
-        port,
-        mode,
-    };
-    let auth = match mode {
-        Mode::Chatgpt => "requires_openai_auth = true",
-        Mode::Openai => "env_key = \"OPENAI_API_KEY\"",
-    };
-    let mut fragment = format!(
-        "# Экспериментальный провайдер Sanctum Rust. Содержит ЛОКАЛЬНЫЙ ключ; храните приватно.\nmodel_provider = \"sanctum_rust\"\nweb_search = \"disabled\"\n\n[model_providers.sanctum_rust]\nname = \"Sanctum Rust: локальный шлюз\"\nbase_url = \"http://127.0.0.1:{port}{}\"\nwire_api = \"responses\"\n{auth}\nsupports_websockets = false\nhttp_headers = {{ \"X-Sanctum-Key\" = \"{}\" }}\n",
-        mode.prefix(),
-        connection.local_key
-    );
-    let mut serialized =
-        serde_json::to_vec_pretty(&connection).map_err(|_| Error("connection_encode_failed"))?;
-    let result = (|| {
-        private_write(&state, &serialized)?;
-        if let Err(error) = private_write(&config, fragment.as_bytes()) {
-            let _ = fs::remove_file(&state);
-            return Err(error);
-        }
-        Ok(())
-    })();
-    serialized.zeroize();
-    fragment.zeroize();
-    result
-}
-
-pub fn package(output: &Path) -> Result<()> {
-    let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
-    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(|_| Error("package_parent_failed"))?;
-    }
-    fs::create_dir(output).map_err(|_| Error("package_output_must_be_new"))?;
-    let result = (|| {
-        let plugin = output.join("plugin");
-        for dir in [
-            plugin.join(".codex-plugin"),
-            plugin.join("hooks"),
-            plugin.join("bin"),
-            output.join(".agents/plugins"),
-        ] {
-            fs::create_dir_all(dir).map_err(|_| Error("package_directory_failed"))?;
-        }
-        for (path, contents) in [
-            (
-                plugin.join("plugin.json"),
-                include_str!("../plugins/sanctum-rust/plugin.json"),
-            ),
-            (
-                plugin.join(".codex-plugin/plugin.json"),
-                include_str!("../plugins/sanctum-rust/.codex-plugin/plugin.json"),
-            ),
-            (
-                plugin.join("hooks/hooks.json"),
-                include_str!("../plugins/sanctum-rust/hooks/hooks.json"),
-            ),
-            (
-                output.join(".agents/plugins/marketplace.json"),
-                "{\"name\":\"sanctum-rust-dev\",\"interface\":{\"displayName\":\"Sanctum Rust\"},\"plugins\":[{\"name\":\"sanctum-rust\",\"source\":{\"source\":\"local\",\"path\":\"./plugin\"},\"policy\":{\"installation\":\"AVAILABLE\",\"authentication\":\"ON_INSTALL\"},\"category\":\"Developer Tools\"}]}\n",
-            ),
-        ] {
-            fs::write(path, contents).map_err(|_| Error("package_write_failed"))?;
-        }
-        #[cfg(windows)]
-        {
-            let hooks = serde_json::json!({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":r#""%CODEX_PLUGIN_ROOT%/bin/sanctum.exe" session-start"#,"timeout":5}]}]}});
-            fs::write(
-                plugin.join("hooks/hooks.json"),
-                serde_json::to_vec_pretty(&hooks).map_err(|_| Error("package_encode_failed"))?,
-            )
-            .map_err(|_| Error("package_write_failed"))?;
-        }
-        let binary = plugin
-            .join("bin")
-            .join(crate::platform::executable("sanctum"));
-        fs::copy(executable, &binary).map_err(|_| Error("package_binary_copy_failed"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(binary, fs::Permissions::from_mode(0o755))
-                .map_err(|_| Error("package_binary_mode_failed"))?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(output);
-    }
-    result
-}
-
 pub fn package_claude(output: &Path) -> Result<()> {
     let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {

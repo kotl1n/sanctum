@@ -1,5 +1,4 @@
 mod support;
-use sanctum::setup;
 use std::{
     io::Write,
     process::{Command, Stdio},
@@ -69,72 +68,6 @@ fn engine_and_guard_report_the_public_release_version() {
             .contains("заблокировано")
     );
 }
-#[test]
-fn setup_is_private_compatible_and_non_overwriting() {
-    let directory = support::TempDir::new();
-    let result = invoke(
-        &["prepare", "--directory", directory.path().to_str().unwrap()],
-        "",
-    );
-    assert!(result.status.success());
-    let connection = setup::load_connection(&directory.path().join("connection.json")).unwrap();
-    assert_eq!(connection.port, 47631);
-    assert_eq!(connection.mode.label(), "chatgpt");
-    assert!(!String::from_utf8_lossy(&result.stdout).contains(&connection.local_key));
-    assert!(
-        !invoke(
-            &["prepare", "--directory", directory.path().to_str().unwrap()],
-            ""
-        )
-        .status
-        .success()
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for name in ["connection.json", "codex.fragment.toml"] {
-            assert_eq!(
-                directory
-                    .path()
-                    .join(name)
-                    .metadata()
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-        }
-    }
-}
-#[test]
-fn package_contains_executable_native_hook_and_no_python_dependency() {
-    let directory = support::TempDir::new();
-    let output = directory.path().join("native-package");
-    assert!(
-        invoke(&["package", "--output", output.to_str().unwrap()], "")
-            .status
-            .success()
-    );
-    let hook = std::fs::read_to_string(output.join("plugin/hooks/hooks.json")).unwrap();
-    assert!(hook.contains("/bin/sanctum"));
-    assert!(!hook.contains("python"));
-    let binary = output.join("plugin/bin/sanctum");
-    assert!(
-        Command::new(support::binary(binary))
-            .arg("--version")
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-    assert!(
-        !invoke(&["package", "--output", output.to_str().unwrap()], "")
-            .status
-            .success()
-    );
-}
-
 #[test]
 fn portless_package_contains_current_ui_assets_and_runnable_binaries() {
     let directory = support::TempDir::new();

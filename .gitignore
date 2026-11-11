@@ -8,8 +8,6 @@ dist/
 *.vault.json
 sanctum.policy.local.json
 .sanctum/
-connection.json
-codex.fragment.toml
 /target/
 .env.*
 !.env.example

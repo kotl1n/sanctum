@@ -3,27 +3,22 @@ name = "sanctum"
 version = "1.0.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Локальный шлюз защиты текста и нативный компаньон Codex"
+description = "Локальное маскирование приватных данных для Codex Desktop и Claude Code"
 license = "GPL-3.0-only"
 publish = false
 default-run = "sanctum"
 
 [dependencies]
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.6", features = ["derive"] }
 fs2 = "0.4.3"
-futures-util = "0.3"
 getrandom = "0.3"
 libc = "0.2"
 regex = "1.12"
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls", "stream", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision", "raw_value"] }
 sha2 = "0.10"
-subtle = "2.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "process", "io-util", "io-std"] }
-tokio-stream = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "process", "io-util", "io-std"] }
 zeroize = "1.8"
 
 [profile.release]

@@ -3,7 +3,6 @@ pub mod bridge;
 pub mod claude_hook;
 pub mod cli;
 mod context_paths;
-pub mod gateway;
 pub mod json;
 pub mod local_arguments;
 pub mod local_command;

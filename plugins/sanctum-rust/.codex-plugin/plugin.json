@@ -1,6 +1,0 @@
-{
-  "name": "sanctum-rust",
-  "version": "1.0.0",
-  "description": "Нативный компаньон для отдельно настроенного локального шлюза Sanctum.",
-  "hooks": "./hooks/hooks.json"
-}
