@@ -236,3 +236,20 @@ fn resumed_sessions_in_the_same_project_share_pseudonyms() {
         "turn_id":"t","message_id":"m","index":0,"final":true,"delta":"[EMAIL-1]\n"});
     assert!(hook(temp.path(), other_project).is_none());
 }
+
+#[test]
+fn mentioned_files_with_private_data_are_not_attached() {
+    let temp = support::TempDir::new();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("secrets.env"), format!("ADMIN={EMAIL}\n")).unwrap();
+    std::fs::write(project.join("notes.md"), "nothing private\n").unwrap();
+    let event = |prompt: &str| json!({"session_id":"s","cwd":project,"hook_event_name":"UserPromptSubmit","prompt":prompt});
+    let blocked = hook(temp.path(), event("check @secrets.env please")).unwrap();
+    assert_eq!(blocked["decision"], "block");
+    let reason = blocked["reason"].as_str().unwrap();
+    assert!(reason.contains("check @secrets.env please"));
+    assert!(reason.contains("not attached") && !reason.contains(EMAIL));
+    assert!(hook(temp.path(), event("check @notes.md please")).is_none());
+    assert!(hook(temp.path(), event("check @missing.env please")).is_none());
+}

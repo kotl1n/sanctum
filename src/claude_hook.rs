@@ -359,20 +359,127 @@ fn updated_output(output: Value) -> Value {
     value!({"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":output}})
 }
 
-/// Замаскированный запрос, если в нём есть приватные данные.
+/// Замаскированный запрос, если в нём или в упомянутых через `@` файлах есть
+/// приватные данные.
 ///
 /// Claude Code не позволяет хуку изменить текст запроса, поэтому оригинал
 /// блокируется, а копию передаёт модели второй, фоновый обработчик с
 /// `asyncRewake`: его вывод при коде 2 приходит модели вместо запроса.
+/// Упомянутые файлы Claude Code прикладывает сам, мимо хуков инструментов;
+/// при блокировке они не прикладываются, а модель получает просьбу прочитать
+/// их инструментом Read, вывод которого маскируется.
 pub fn masked_prompt(event: &Value, policy: Policy, vault: &Vault) -> Result<Option<String>> {
     if event["hook_event_name"] != "UserPromptSubmit" {
         return Ok(None);
     }
     let session = &scope(event)?;
     let prompt = event["prompt"].as_str().ok_or(Error("prompt_required"))?;
-    let masked = vault.mask(session, policy, &Value::String(prompt.into()))?;
+    let directory = event["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CLAUDE_PROJECT_DIR").map(PathBuf::from));
+    let mut private = Vec::new();
+    for mention in mentions(prompt) {
+        if let Some(path) = mentioned_file(&mention, directory.as_deref())
+            && private_file(vault, session, policy.clone(), &path)?
+        {
+            private.push(mention);
+        }
+    }
+    let mut text = prompt.to_owned();
+    if !private.is_empty() {
+        text.push_str(&format!(
+            "\n\n[Sanctum: these files mentioned with @ were not attached because they contain private data: {}. Read them with the Read tool; their contents will be masked.]",
+            private.join(", ")
+        ));
+    }
+    let masked = vault.mask(session, policy, &Value::String(text))?;
     let masked = masked.as_str().ok_or(Error("invalid_output"))?;
     Ok((masked != prompt).then(|| masked.to_owned()))
+}
+
+/// Упоминания файлов так, как их находит Claude Code: `@"путь"` и `@путь` в
+/// начале слова, без концевой пунктуации.
+fn mentions(prompt: &str) -> Vec<String> {
+    const DELIMITERS: &[char] = &['\u{3002}', '\u{3001}', '\u{FF1F}', '\u{FF01}'];
+    let delimiter = |c: char| c.is_whitespace() || DELIMITERS.contains(&c);
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    let mut found = Vec::new();
+    let mut previous = None;
+    for (index, c) in prompt.char_indices() {
+        if c == '@'
+            && previous.is_none_or(delimiter)
+            && let Some(rest) = prompt[index + 1..].strip_prefix('"')
+            && let Some(end) = rest.find('"')
+            && end > 0
+        {
+            found.push(rest[..end].to_owned());
+        }
+        previous = Some(c);
+    }
+    for token in prompt.split(delimiter).filter(|t| !t.is_empty()) {
+        let mut start = None;
+        let mut before = None;
+        for (index, c) in token.char_indices() {
+            if c == '@' && (index == 0 || before.is_some_and(|b| DELIMITERS.contains(&b))) {
+                start = Some(index + 1);
+                break;
+            }
+            before = Some(c);
+        }
+        let Some(start) = start else { continue };
+        let rest = &token[start..];
+        if rest.starts_with('"') {
+            continue;
+        }
+        let chars: Vec<char> = rest.chars().collect();
+        let mut end = chars.len();
+        while end >= 1 && word(chars.get(end - 1).copied()) == word(chars.get(end).copied()) {
+            end -= 1;
+        }
+        if end >= 1 {
+            found.push(chars[..end].iter().collect());
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn mentioned_file(mention: &str, directory: Option<&std::path::Path>) -> Option<PathBuf> {
+    let path = mention.split('#').next().filter(|p| !p.is_empty())?;
+    let path = match path.strip_prefix("~/") {
+        Some(rest) => crate::platform::home().ok()?.join(rest),
+        None => PathBuf::from(path),
+    };
+    let path = if path.is_absolute() {
+        path
+    } else {
+        directory?.join(path)
+    };
+    path.is_file().then_some(path)
+}
+
+/// Есть ли в текстовом файле приватные данные. Слишком большой файл считается
+/// приватным: проверить его целиком нельзя. Двоичные файлы, включая
+/// изображения, не проверяются.
+fn private_file(
+    vault: &Vault,
+    session: &str,
+    policy: Policy,
+    path: &std::path::Path,
+) -> Result<bool> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(false);
+    };
+    if metadata.len() > crate::MAX_BODY as u64 / 2 {
+        return Ok(true);
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(false);
+    };
+    let content = Value::String(text);
+    Ok(vault.mask(session, policy, &content)? != content)
 }
 
 fn blocked_prompt(masked: Option<&str>) -> Value {
@@ -469,6 +576,15 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, "Zq9".repeat(30));
+    }
+
+    #[test]
+    fn mentions_follow_claude_code_syntax() {
+        assert_eq!(
+            mentions(r#"see @src/a.rs#L1-5, @"my dir/b.txt" and @c.md). (@d.md) mail a@b.example"#),
+            vec!["c.md", "my dir/b.txt", "src/a.rs#L1-5"]
+        );
+        assert!(mentions("no mentions, a@b.example").is_empty());
     }
 
     #[test]
