@@ -421,3 +421,30 @@ fn multiline_sse_and_no_restore_mode() {
     );
     decoder.finish().unwrap();
 }
+
+#[test]
+fn technical_tokens_are_not_mistaken_for_generated_passwords() {
+    for text in [
+        "что в @/tmp/claude-1000/-home-user/ChatGPT-Sanctum/3616524b/scratchpad/mention-test.env ?",
+        "see @./src/claude_hook.rs and @~/notes/plan-2026.md",
+        "tool id toolu_01HF1dsUv2oq63k76VKdXadF and msg_01XFDUDYJgAACzvnptvVoYEL",
+        "request req_011CQZrqrWcLdSn3Hf6uX2ka failed",
+        "            if !LOCAL_TOOLS.contains(&name)",
+        r#"Ok(Some(value!({"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":restored}})))"#,
+        r#"let name = event["tool_name"].as_str().ok_or(Error("tool_name_required"))?;"#,
+        "fn mentioned_file(mention: &str, directory: Option<&std::path::Path>) -> Option<PathBuf> {",
+        "#[derive(Clone, Copy, Debug, PartialEq, Eq)]",
+        r#"    .join("\u{2060}")"#,
+    ] {
+        let mut r = engine();
+        assert_eq!(r.text(text).unwrap(), text, "{text}");
+    }
+    for secret in [
+        "Zt7#kQ9!mW2$xR4p".to_owned(),
+        format!("sk_live_{}", "Hx9Qb2Kz".repeat(3)),
+        "@Zt7#kQ9!mW2$xR4p".to_owned(),
+    ] {
+        let mut r = engine();
+        assert!(r.text(&secret).unwrap().contains('['), "{secret}");
+    }
+}

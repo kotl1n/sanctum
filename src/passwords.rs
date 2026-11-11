@@ -66,20 +66,53 @@ pub(crate) fn spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 fn technical(value: &str) -> bool {
+    // Упоминание файла в Claude Code: `@/path`, `@./path`, `@~/path`.
+    let value = value
+        .strip_prefix('@')
+        .filter(|path| path.starts_with(['/', '.', '~']))
+        .unwrap_or(value);
     let lower = value.to_ascii_lowercase();
     if crate::redaction::is_token(value.trim_end_matches([',', ';'])) {
         return true;
     }
+    // Идентификаторы API Claude: `toolu_…`, `msg_…`, `req_…`.
+    if ["toolu_", "srvtoolu_", "msg_", "msgbatch_", "req_"]
+        .iter()
+        .any(|prefix| {
+            value
+                .strip_prefix(prefix)
+                .is_some_and(|id| id.bytes().all(|c| c.is_ascii_alphanumeric()))
+        })
+    {
+        return true;
+    }
+    // Формы исходного кода: вызов метода, обобщённый тип, атрибут, escape.
+    static CODE: OnceLock<Regex> = OnceLock::new();
+    let code = CODE.get_or_init(|| {
+        Regex::new(
+            r"(?:\.|::)[A-Za-z_][A-Za-z0-9_]+\(|\b[A-Z][A-Za-z0-9]+<[&'A-Za-z_]|^#!?\[|\\u\{[0-9A-Fa-f]+\}",
+        )
+        .unwrap()
+    });
+    if code.is_match(value) {
+        return true;
+    }
+    // Вызов функции или макроса, в том числе с отрицанием или ссылкой:
+    // `!items.contains(`, `value!(`, `Ok(`.
     if let Some((name, _)) = value.split_once('(')
-        && name.len() >= 3
+        && let name = name
+            .trim_start_matches(['!', '&', '*'])
+            .trim_end_matches('!')
+        && name.len() >= 2
+        && name.as_bytes()[0].is_ascii_alphabetic()
         && name
             .bytes()
-            .all(|c| c.is_ascii_alphabetic() || b"_.:".contains(&c))
+            .all(|c| c.is_ascii_alphanumeric() || b"_.:".contains(&c))
     {
         return true;
     }
     if value.contains("://")
-        || (value.starts_with(['/', '.'])
+        || (value.starts_with(['/', '.', '~'])
             && value
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"_./-".contains(&c)))
