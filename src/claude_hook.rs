@@ -69,9 +69,7 @@ pub fn handle(
     vault: &Vault,
     runner: &Runner,
 ) -> Result<Option<Value>> {
-    let session = event["session_id"]
-        .as_str()
-        .ok_or(Error("session_id_required"))?;
+    let session = &scope(event)?;
     match event["hook_event_name"].as_str() {
         Some("SessionStart") => Ok(Some(
             value!({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":CONTEXT}}),
@@ -134,7 +132,166 @@ pub fn handle(
             }
             Ok(Some(updated_output(masked)))
         }
+        Some("MessageDisplay") => {
+            let delta = event["delta"].as_str().unwrap_or("");
+            if !has_tokens(&Value::String(delta.into())) || !vault.exists(session)? {
+                return Ok(None);
+            }
+            let style = DisplayStyle::current();
+            let shown =
+                vault.transact(session, policy, |engine| Ok(display(engine, delta, style)))?;
+            if shown == delta {
+                return Ok(None);
+            }
+            Ok(Some(
+                value!({"hookSpecificOutput":{"hookEventName":"MessageDisplay","displayContent":shown}}),
+            ))
+        }
         _ => Ok(None),
+    }
+}
+
+/// Как выделить восстановленное значение на экране, чтобы было видно,
+/// что модель получила вместо него псевдоним.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayStyle {
+    /// Тёмно-серый цвет ANSI для терминала.
+    Ansi,
+    /// Серая формула LaTeX для интерфейсов, которые показывают markdown с
+    /// формулами, но не HTML (десктопное приложение Claude).
+    Latex,
+    /// Значение без оформления.
+    Plain,
+}
+impl DisplayStyle {
+    pub fn current() -> Self {
+        match std::env::var("SANCTUM_DISPLAY_STYLE").as_deref() {
+            Ok("ansi") => Self::Ansi,
+            Ok("latex") => Self::Latex,
+            Ok("plain") => Self::Plain,
+            _ if std::env::var("CLAUDE_CODE_ENTRYPOINT").as_deref() == Ok("cli") => Self::Ansi,
+            _ => Self::Latex,
+        }
+    }
+}
+
+/// Заменяет известные псевдонимы исходными значениями только для показа.
+/// Внутри блоков и фрагментов кода формулы не работают, поэтому там значение
+/// вставляется без оформления.
+pub fn display(engine: &Redactor, text: &str, style: DisplayStyle) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut fenced = false;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+            fenced = !fenced;
+            result.push_str(line);
+            continue;
+        }
+        let mut cursor = 0;
+        for token in crate::redaction::token_matches(line) {
+            let Some(original) = engine.original(token) else {
+                continue;
+            };
+            let start = token.as_ptr() as usize - line.as_ptr() as usize;
+            let inline_code = line[..start].matches('`').count() % 2 == 1;
+            result.push_str(&line[cursor..start]);
+            result.push_str(&match style {
+                DisplayStyle::Ansi => format!("\x1b[90m{original}\x1b[39m"),
+                DisplayStyle::Latex if !fenced && !inline_code => gray_latex(original),
+                _ => original.to_owned(),
+            });
+            cursor = start + token.len();
+        }
+        result.push_str(&line[cursor..]);
+    }
+    result
+}
+
+/// Предел длины формулы, которую десктопное приложение ещё распознаёт.
+const FORMULA_LIMIT: usize = 60;
+
+/// Записывает значение серыми формулами LaTeX так, как их распознаёт
+/// десктопное приложение: исходник каждой формулы не длиннее
+/// [`FORMULA_LIMIT`], в нём нет буквального `@`, а формулы разделены
+/// невидимым U+2060, чтобы `$$` не превратилось в выносную формулу.
+/// Перед `:` и `.` и внутри лигатур вроде `--` начинается новый `\text{}`,
+/// чтобы в исходнике не было ссылок и значение показалось без изменений.
+fn gray_latex(text: &str) -> String {
+    const OPEN: &str = "\\color{gray}{";
+    let mut formulas = Vec::new();
+    let mut body = String::new();
+    let mut in_text = false;
+    let mut previous = None;
+    let close = |body: &mut String, in_text: &mut bool| {
+        if *in_text {
+            body.push('}');
+            *in_text = false;
+        }
+    };
+    for c in text.chars() {
+        let (snippet, text_mode, command) = match c {
+            '\\' => ("\\textbackslash".to_owned(), true, true),
+            '^' => ("\\textasciicircum".to_owned(), true, true),
+            '~' => ("\\textasciitilde".to_owned(), true, true),
+            '@' => ("\\char64".to_owned(), false, false),
+            '{' | '}' | '$' | '&' | '%' | '#' | '_' => (format!("\\{c}"), true, false),
+            _ => (c.to_string(), true, false),
+        };
+        let opening = if text_mode && !in_text {
+            "\\text{".len()
+        } else {
+            0
+        };
+        if !body.is_empty() && OPEN.len() + body.len() + opening + snippet.len() + 2 > FORMULA_LIMIT
+        {
+            close(&mut body, &mut in_text);
+            formulas.push(std::mem::take(&mut body));
+        }
+        if !text_mode
+            || matches!(c, ':' | '.')
+            || matches!(c, '-' | '\'' | '`') && previous == Some(c)
+        {
+            close(&mut body, &mut in_text);
+        }
+        if text_mode && !in_text {
+            body.push_str("\\text{");
+            in_text = true;
+        }
+        body.push_str(&snippet);
+        if command {
+            close(&mut body, &mut in_text);
+        }
+        previous = Some(c);
+    }
+    close(&mut body, &mut in_text);
+    if !body.is_empty() {
+        formulas.push(body);
+    }
+    formulas
+        .iter()
+        .map(|body| format!("${OPEN}{body}}}$"))
+        .collect::<Vec<_>>()
+        .join("\u{2060}")
+}
+
+/// Соответствия общие для проекта: Claude Code выдаёт новый `session_id` при
+/// возобновлении, форке и `/clear`, а псевдонимы в истории должны продолжать
+/// восстанавливаться. Без каталога проекта используется сеанс.
+fn scope(event: &Value) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let project = std::env::var("CLAUDE_PROJECT_DIR")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .or_else(|| event["cwd"].as_str().map(str::to_owned));
+    match project {
+        Some(path) => Ok(format!(
+            "claude-project-{:x}",
+            Sha256::digest(path.as_bytes())
+        )),
+        None => event["session_id"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(Error("session_id_required")),
     }
 }
 
@@ -211,9 +368,7 @@ pub fn masked_prompt(event: &Value, policy: Policy, vault: &Vault) -> Result<Opt
     if event["hook_event_name"] != "UserPromptSubmit" {
         return Ok(None);
     }
-    let session = event["session_id"]
-        .as_str()
-        .ok_or(Error("session_id_required"))?;
+    let session = &scope(event)?;
     let prompt = event["prompt"].as_str().ok_or(Error("prompt_required"))?;
     let masked = vault.mask(session, policy, &Value::String(prompt.into()))?;
     let masked = masked.as_str().ok_or(Error("invalid_output"))?;
@@ -286,6 +441,34 @@ mod tests {
             conform(&original, &masked, None),
             value!({"stdout":"[EMAIL-1]","code":0,"ok":true,"file":{"base64":"QUJD"}})
         );
+    }
+
+    #[test]
+    fn gray_latex_keeps_value_literal_and_short() {
+        assert_eq!(
+            gray_latex(r"a--b_c$"),
+            r"$\color{gray}{\text{a-}\text{-b\_c\$}}$"
+        );
+        assert_eq!(
+            gray_latex(r"d\e"),
+            r"$\color{gray}{\text{d\textbackslash}\text{e}}$"
+        );
+        assert_eq!(
+            gray_latex("x@y-z.example"),
+            r"$\color{gray}{\text{x}\char64\text{y-z}\text{.example}}$"
+        );
+        let long = gray_latex(&"Zq9".repeat(30));
+        let formulas: Vec<&str> = long.split('\u{2060}').collect();
+        assert!(formulas.len() > 1);
+        assert!(formulas.iter().all(|f| f.len() - 2 <= FORMULA_LIMIT));
+        let shown: String = formulas
+            .iter()
+            .map(|f| {
+                f.trim_start_matches(r"$\color{gray}{\text{")
+                    .trim_end_matches("}}$")
+            })
+            .collect();
+        assert_eq!(shown, "Zq9".repeat(30));
     }
 
     #[test]

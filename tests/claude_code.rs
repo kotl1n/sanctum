@@ -158,3 +158,81 @@ fn forwarded_prompt_wakes_the_model_with_masked_text_only() {
     assert_eq!(clean.status.code(), Some(0));
     assert!(clean.stderr.is_empty());
 }
+
+#[test]
+fn displayed_messages_show_original_values_marked_as_model_placeholders() {
+    let temp = support::TempDir::new();
+    mask_output(temp.path(), &format!("{EMAIL} {ADDRESS}"));
+    let show = |style: &str, delta: &str| -> Option<String> {
+        let mut child = Command::new(support::binary(env!("CARGO_BIN_EXE_sanctum-guard")))
+            .args(["claude-hook", "--state-directory"])
+            .arg(temp.path().join("private"))
+            .env("SANCTUM_SETTINGS_PATH", temp.path().join("settings.json"))
+            .env("SANCTUM_DISPLAY_STYLE", style)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let event = json!({"session_id":"s","hook_event_name":"MessageDisplay","turn_id":"t",
+            "message_id":"m","index":0,"final":true,"delta":delta});
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(event.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        (!text.trim().is_empty()).then(|| {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            value["hookSpecificOutput"]["displayContent"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+    };
+    assert_eq!(
+        show("ansi", "mail [EMAIL-1]\n").unwrap(),
+        format!("mail \x1b[90m{EMAIL}\x1b[39m\n")
+    );
+    let latex = show("latex", "host [IP-1], `[IP-1]`\n```\n[IP-1]\n```\n").unwrap();
+    assert_eq!(
+        latex,
+        format!(
+            "host $\\color{{gray}}{{\\text{{11}}\\text{{.111}}\\text{{.111}}\\text{{.11}}}}$, `{ADDRESS}`\n```\n{ADDRESS}\n```\n"
+        )
+    );
+    assert!(show("latex", "nothing [IP-7] here\n").is_none());
+    assert!(show("latex", "plain text\n").is_none());
+}
+
+#[test]
+fn resumed_sessions_in_the_same_project_share_pseudonyms() {
+    let temp = support::TempDir::new();
+    let first = hook(
+        temp.path(),
+        json!({"session_id":"before-resume","cwd":"/work/app","hook_event_name":"PostToolUse","tool_name":"Bash",
+            "tool_input":{},"tool_response":{"stdout":EMAIL,"stderr":""}}),
+    )
+    .unwrap();
+    assert_eq!(
+        first["hookSpecificOutput"]["updatedToolOutput"]["stdout"],
+        "[EMAIL-1]"
+    );
+    let shown = hook(
+        temp.path(),
+        json!({"session_id":"after-resume","cwd":"/work/app","hook_event_name":"MessageDisplay",
+            "turn_id":"t","message_id":"m","index":0,"final":true,"delta":"[EMAIL-1]\n"}),
+    )
+    .unwrap();
+    assert!(
+        shown["hookSpecificOutput"]["displayContent"]
+            .as_str()
+            .unwrap()
+            .contains(r"\text{demo}\text{.user}\char64")
+    );
+    let other_project = json!({"session_id":"after-resume","cwd":"/work/other","hook_event_name":"MessageDisplay",
+        "turn_id":"t","message_id":"m","index":0,"final":true,"delta":"[EMAIL-1]\n"});
+    assert!(hook(temp.path(), other_project).is_none());
+}

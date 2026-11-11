@@ -57,6 +57,17 @@
           }
         ]
       }
+    ],
+    "MessageDisplay": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
