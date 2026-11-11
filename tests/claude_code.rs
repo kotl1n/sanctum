@@ -86,7 +86,11 @@ fn bash_runs_restored_command_without_exposing_values_to_the_hook_output() {
     assert!(!encoded.contains(EMAIL));
     let input = &result["hookSpecificOutput"]["updatedInput"];
     assert_eq!(input["description"], "count");
-    let run = Command::new("/bin/sh")
+    #[cfg(windows)]
+    let shell = sanctum::claude_hook::git_bash().expect("Git Bash is required on Windows");
+    #[cfg(not(windows))]
+    let shell = std::path::PathBuf::from("/bin/sh");
+    let run = Command::new(shell)
         .args(["-c", input["command"].as_str().unwrap()])
         .output()
         .unwrap();

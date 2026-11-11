@@ -115,6 +115,9 @@ pub fn run_with_options(
                     ),
                 ]);
             }
+            "bash.exe" | "sh.exe" => {
+                command.args([if login { "-lc" } else { "-c" }, &*restored]);
+            }
             _ => return Err(Error("unsupported_windows_shell")),
         }
         command

@@ -35,25 +35,53 @@ pub struct Runner {
     pub state_directory: Option<PathBuf>,
 }
 impl Runner {
-    fn command(&self, session: &str, command: &str, timeout_ms: u64) -> String {
+    fn command(&self, session: &str, command: &str, timeout_ms: u64) -> Result<String> {
+        // Git Bash понимает пути Windows с прямыми косыми чертами.
+        let path = |path: &std::path::Path| path.to_string_lossy().replace('\\', "/");
         let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
         let hex = |text: &str| -> String { text.bytes().map(|c| format!("{c:02x}")).collect() };
         let mut line = format!(
             "{} run-command --session {} --command-hex {} --timeout-ms {timeout_ms}",
-            quote(&self.executable.to_string_lossy()),
+            quote(&path(&self.executable)),
             quote(session),
             hex(command)
         );
-        for (flag, path) in [
+        let shell = if cfg!(windows) {
+            Some(git_bash().ok_or(Error("git_bash_required"))?)
+        } else {
+            None
+        };
+        for (flag, value) in [
             ("--policy", &self.policy),
             ("--state-directory", &self.state_directory),
+            ("--shell", &shell),
         ] {
-            if let Some(path) = path {
-                line.push_str(&format!(" {flag} {}", quote(&path.to_string_lossy())));
+            if let Some(value) = value {
+                line.push_str(&format!(" {flag} {}", quote(&path(value))));
             }
         }
-        line
+        Ok(line)
     }
+}
+
+/// Git Bash, в котором Claude Code на Windows выполняет команды Bash.
+pub fn git_bash() -> Option<PathBuf> {
+    let configured = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from);
+    let from_git = std::env::var_os("PATH").into_iter().flat_map(|paths| {
+        std::env::split_paths(&paths)
+            .filter(|dir| dir.join("git.exe").is_file())
+            .flat_map(|dir| [dir.join("../bin/bash.exe"), dir.join("../../bin/bash.exe")])
+            .collect::<Vec<_>>()
+    });
+    let installed =
+        std::env::var_os("ProgramFiles").map(|dir| PathBuf::from(dir).join("Git/bin/bash.exe"));
+    configured
+        .into_iter()
+        .chain(from_git)
+        .chain(installed)
+        .find(|path| path.is_file())
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| PathBuf::from(path.to_string_lossy().trim_start_matches(r"\\?\")))
 }
 
 pub fn handle(
@@ -92,14 +120,14 @@ pub fn handle(
                 return Ok(None);
             }
             let updated = match (name, input["command"].as_str()) {
-                ("Bash", Some(command)) if !cfg!(windows) => {
+                ("Bash", Some(command)) => {
                     let timeout = if input["run_in_background"] == true {
                         24 * 3600 * 1000
                     } else {
                         input["timeout"].as_u64().unwrap_or(120_000)
                     };
                     let mut wrapped = input.clone();
-                    wrapped["command"] = runner.command(session, command, timeout).into();
+                    wrapped["command"] = runner.command(session, command, timeout)?.into();
                     wrapped
                 }
                 _ => restored,
