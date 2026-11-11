@@ -1,10 +1,5 @@
-//! Обработчик событий Claude Code: маскирование без прокси и сетевого порта.
-//!
-//! Модель видит только псевдонимы. Запросы с приватными данными блокируются
-//! с замаскированной копией, вывод инструментов заменяется через
-//! `updatedToolOutput`. Исходные значения не попадают в ответы обработчика,
-//! которые Claude Code сохраняет в журнал сеанса: команды Bash восстанавливает
-//! и выполняет `run-command`, а файлы после Write и Edit восстанавливаются на месте.
+//! Обработчик событий Claude Code: маскирование через хуки, без прокси и сетевого порта.
+//! Исходные значения не попадают в ответы хуков, которые сохраняются в журнал сеанса.
 use crate::{
     Error, Result, protocol::Session, redaction::Policy, redaction::Redactor, rewrite::OMITTED,
     vault::Vault,
@@ -13,7 +8,6 @@ use serde_json::{Value, json as value};
 use std::path::PathBuf;
 
 /// Инструменты, которые выполняются на устройстве и получают исходные значения.
-/// Сетевые инструменты, MCP и субагенты продолжают видеть псевдонимы.
 pub const LOCAL_TOOLS: &[&str] = &[
     "Bash",
     "PowerShell",
@@ -35,7 +29,6 @@ const FILE_TOOLS: &[(&str, &str)] = &[
 
 const CONTEXT: &str = "Sanctum privacy guard is active. Values like [EMAIL-1], [IP-2], [KEY-1] or [SECRET-3] are local pseudonyms for private data. Use them verbatim in local tool calls (Bash, Read, Write, Edit, Grep, Glob): Sanctum restores the real values on this device and masks tool output again. Files you read show pseudonyms while the file on disk keeps real values, so an Edit old_string must not contain pseudonyms: anchor it on neighbouring text, or use Write or Bash. Do not try to guess, reconstruct or ask for the original values, and do not pass pseudonyms to network tools expecting them to resolve.";
 
-/// Как запустить `run-command` с тем же состоянием и политикой.
 pub struct Runner {
     pub executable: PathBuf,
     pub policy: Option<PathBuf>,
@@ -151,16 +144,12 @@ pub fn handle(
     }
 }
 
-/// Как выделить восстановленное значение на экране, чтобы было видно,
-/// что модель получила вместо него псевдоним.
+/// Как выделить на экране значение, вместо которого модель получила псевдоним.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayStyle {
-    /// Тёмно-серый цвет ANSI для терминала.
     Ansi,
-    /// Серая формула LaTeX для интерфейсов, которые показывают markdown с
-    /// формулами, но не HTML (десктопное приложение Claude).
+    /// Десктопное приложение показывает формулы, но не HTML.
     Latex,
-    /// Значение без оформления.
     Plain,
 }
 impl DisplayStyle {
@@ -175,9 +164,7 @@ impl DisplayStyle {
     }
 }
 
-/// Заменяет известные псевдонимы исходными значениями только для показа.
-/// Внутри блоков и фрагментов кода формулы не работают, поэтому там значение
-/// вставляется без оформления.
+/// Восстанавливает значения только для показа; в коде формулы не работают.
 pub fn display(engine: &Redactor, text: &str, style: DisplayStyle) -> String {
     let mut result = String::with_capacity(text.len());
     let mut fenced = false;
@@ -207,15 +194,11 @@ pub fn display(engine: &Redactor, text: &str, style: DisplayStyle) -> String {
     result
 }
 
-/// Предел длины формулы, которую десктопное приложение ещё распознаёт.
 const FORMULA_LIMIT: usize = 60;
 
-/// Записывает значение серыми формулами LaTeX так, как их распознаёт
-/// десктопное приложение: исходник каждой формулы не длиннее
-/// [`FORMULA_LIMIT`], в нём нет буквального `@`, а формулы разделены
-/// невидимым U+2060, чтобы `$$` не превратилось в выносную формулу.
-/// Перед `:` и `.` и внутри лигатур вроде `--` начинается новый `\text{}`,
-/// чтобы в исходнике не было ссылок и значение показалось без изменений.
+/// Десктопное приложение распознаёт формулу не длиннее [`FORMULA_LIMIT`] и без
+/// буквального `@`; U+2060 не даёт `$$` стать выносной формулой, а новый
+/// `\text{}` перед `:`, `.` и внутри `--` мешает ссылкам и лигатурам.
 fn gray_latex(text: &str) -> String {
     const OPEN: &str = "\\color{gray}{";
     let mut formulas = Vec::new();
@@ -274,9 +257,7 @@ fn gray_latex(text: &str) -> String {
         .join("\u{2060}")
 }
 
-/// Соответствия общие для проекта: Claude Code выдаёт новый `session_id` при
-/// возобновлении, форке и `/clear`, а псевдонимы в истории должны продолжать
-/// восстанавливаться. Без каталога проекта используется сеанс.
+/// Соответствия общие для проекта: `session_id` меняется при возобновлении, форке и `/clear`.
 fn scope(event: &Value) -> Result<String> {
     use sha2::{Digest, Sha256};
     let project = std::env::var("CLAUDE_PROJECT_DIR")
@@ -301,8 +282,6 @@ fn has_tokens(value: &Value) -> bool {
         .is_some()
 }
 
-/// Заменяет известные псевдонимы в записанном файле исходными значениями.
-/// В блокнотах значения экранируются как строки JSON.
 fn restore_file(vault: &Vault, session: &str, policy: Policy, path: &str) -> Result<()> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -359,15 +338,9 @@ fn updated_output(output: Value) -> Value {
     value!({"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":output}})
 }
 
-/// Замаскированный запрос, если в нём или в упомянутых через `@` файлах есть
-/// приватные данные.
-///
-/// Claude Code не позволяет хуку изменить текст запроса, поэтому оригинал
-/// блокируется, а копию передаёт модели второй, фоновый обработчик с
-/// `asyncRewake`: его вывод при коде 2 приходит модели вместо запроса.
-/// Упомянутые файлы Claude Code прикладывает сам, мимо хуков инструментов;
-/// при блокировке они не прикладываются, а модель получает просьбу прочитать
-/// их инструментом Read, вывод которого маскируется.
+/// Хук не может изменить запрос, поэтому оригинал блокируется, а копию передаёт
+/// фоновый обработчик с `asyncRewake`. Файлы из `@` прикладываются мимо хуков,
+/// поэтому модель читает их маскируемым Read.
 pub fn masked_prompt(event: &Value, policy: Policy, vault: &Vault) -> Result<Option<String>> {
     if event["hook_event_name"] != "UserPromptSubmit" {
         return Ok(None);
@@ -398,8 +371,7 @@ pub fn masked_prompt(event: &Value, policy: Policy, vault: &Vault) -> Result<Opt
     Ok((masked != prompt).then(|| masked.to_owned()))
 }
 
-/// Упоминания файлов так, как их находит Claude Code: `@"путь"` и `@путь` в
-/// начале слова, без концевой пунктуации.
+/// Упоминания файлов по правилам Claude Code: `@"путь"` и `@путь`.
 fn mentions(prompt: &str) -> Vec<String> {
     const DELIMITERS: &[char] = &['\u{3002}', '\u{3001}', '\u{FF1F}', '\u{FF01}'];
     let delimiter = |c: char| c.is_whitespace() || DELIMITERS.contains(&c);
@@ -460,9 +432,7 @@ fn mentioned_file(mention: &str, directory: Option<&std::path::Path>) -> Option<
     path.is_file().then_some(path)
 }
 
-/// Есть ли в текстовом файле приватные данные. Слишком большой файл считается
-/// приватным: проверить его целиком нельзя. Двоичные файлы, включая
-/// изображения, не проверяются.
+/// Слишком большой файл считается приватным; двоичные файлы не проверяются.
 fn private_file(
     vault: &Vault,
     session: &str,
@@ -493,10 +463,7 @@ fn blocked_prompt(masked: Option<&str>) -> Value {
         "hookSpecificOutput":{"hookEventName":"UserPromptSubmit","suppressOriginalPrompt":true}})
 }
 
-/// Возвращает замаскированное значение в форме исходного: Claude Code
-/// отклоняет `updatedToolOutput` другой формы и тогда передаёт модели оригинал.
-/// Числа и флаги, ставшие псевдонимами, заменяются нейтральными значениями,
-/// данные изображений не меняются.
+/// `updatedToolOutput` другой формы Claude Code отбрасывает и передаёт оригинал.
 fn conform(original: &Value, masked: &Value, field: Option<&str>) -> Value {
     if field == Some("base64") {
         return original.clone();

@@ -20,3 +20,6 @@ auth.json
 /.codex/
 .DS_Store
 *.log
+
+# Local private test data
+codex-private-files*

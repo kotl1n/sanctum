@@ -35,16 +35,6 @@ enum Command {
     /// Сохранить элемент ответа для воспроизведения истории
     ProviderItem,
 
-    /// Создать устаревший пакет совместимости без защиты
-    Package {
-        #[arg(
-            long,
-            default_value = "dist/sanctum-prompt-guard",
-            help = "Новый каталог для пакета"
-        )]
-        output: PathBuf,
-    },
-
     /// Обработать событие локального инструмента
     Hook {
         #[arg(long, help = "Файл политики распознавания")]
@@ -376,10 +366,6 @@ fn run(command: Command) -> Result<()> {
         Command::PackagePortless { output } => {
             setup::package_portless(&output)?;
             println!("Пакет интеграции Desktop создан в {}", output.display());
-        }
-        Command::Package { output } => {
-            setup::package_prompt_guard(&output)?;
-            println!("Пакет совместимости создан в {}", output.display());
         }
     }
     Ok(())

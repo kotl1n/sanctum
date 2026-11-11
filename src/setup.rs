@@ -205,60 +205,6 @@ pub fn package(output: &Path) -> Result<()> {
     result
 }
 
-pub fn package_prompt_guard(output: &Path) -> Result<()> {
-    let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
-    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(|_| Error("package_parent_failed"))?;
-    }
-    fs::create_dir(output).map_err(|_| Error("package_output_must_be_new"))?;
-    let result = (|| {
-        let plugin = output.join("plugin");
-        for dir in [
-            plugin.join(".codex-plugin"),
-            plugin.join("hooks"),
-            plugin.join("bin"),
-            output.join(".agents/plugins"),
-        ] {
-            fs::create_dir_all(dir).map_err(|_| Error("package_directory_failed"))?;
-        }
-        for (path, contents) in [
-            (
-                plugin.join(".codex-plugin/plugin.json"),
-                include_str!("../plugins/sanctum-prompt-guard/.codex-plugin/plugin.json"),
-            ),
-            (
-                plugin.join("hooks/hooks.json"),
-                include_str!("../plugins/sanctum-prompt-guard/hooks/hooks.json"),
-            ),
-            (
-                plugin.join("policy.json"),
-                include_str!("../plugins/sanctum-prompt-guard/policy.json"),
-            ),
-            (
-                output.join(".agents/plugins/marketplace.json"),
-                "{\"name\":\"sanctum-guard-dev\",\"interface\":{\"displayName\":\"Sanctum: совместимость без защиты\"},\"plugins\":[{\"name\":\"sanctum-prompt-guard\",\"source\":{\"source\":\"local\",\"path\":\"./plugin\"},\"policy\":{\"installation\":\"AVAILABLE\",\"authentication\":\"ON_INSTALL\"},\"category\":\"Developer Tools\"}]}\n",
-            ),
-        ] {
-            fs::write(path, contents).map_err(|_| Error("package_write_failed"))?;
-        }
-        let binary = plugin
-            .join("bin")
-            .join(crate::platform::executable("sanctum-guard"));
-        fs::copy(executable, &binary).map_err(|_| Error("package_binary_copy_failed"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(binary, fs::Permissions::from_mode(0o755))
-                .map_err(|_| Error("package_binary_mode_failed"))?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(output);
-    }
-    result
-}
-
 pub fn package_claude(output: &Path) -> Result<()> {
     let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
