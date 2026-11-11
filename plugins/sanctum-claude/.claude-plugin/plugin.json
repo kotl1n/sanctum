@@ -1,0 +1,11 @@
+{
+  "name": "sanctum-claude",
+  "version": "1.0.0",
+  "description": "Локальное маскирование приватных данных в Claude Code без прокси и сетевого порта. Модель видит только псевдонимы; исходные значения восстанавливаются на устройстве для локальных инструментов.",
+  "author": {
+    "name": "Sanctum"
+  },
+  "license": "GPL-3.0-only",
+  "keywords": ["privacy", "redaction", "pii", "secrets"],
+  "hooks": "./hooks/hooks.json"
+}

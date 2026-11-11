@@ -25,9 +25,20 @@ pub fn decode(encoded: &str) -> Result<String> {
         .collect::<Result<Vec<_>>>()?;
     String::from_utf8(bytes).map_err(|_| Error("utf8_required"))
 }
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 pub fn run(vault: &Vault, session: &str, policy: Policy, encoded: &str) -> Result<i32> {
-    run_with_options(vault, session, policy, encoded, None, false, None)
+    run_with_options(
+        vault,
+        session,
+        policy,
+        encoded,
+        None,
+        false,
+        None,
+        DEFAULT_TIMEOUT,
+    )
 }
+#[allow(clippy::too_many_arguments)]
 pub fn run_with_options(
     vault: &Vault,
     session: &str,
@@ -36,6 +47,7 @@ pub fn run_with_options(
     shell: Option<&str>,
     login: bool,
     cwd_hex: Option<&str>,
+    timeout: Duration,
 ) -> Result<i32> {
     if !vault.exists(session)? {
         return Err(Error("protected_session_required"));
@@ -184,7 +196,7 @@ pub fn run_with_options(
     std::thread::spawn(move || {
         let _ = errors.send((true, capture(stderr)));
     });
-    let until = Instant::now() + Duration::from_secs(120);
+    let until = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,

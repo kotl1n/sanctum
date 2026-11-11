@@ -53,6 +53,19 @@ enum Command {
         state_directory: Option<PathBuf>,
     },
 
+    /// Обработать событие Claude Code
+    ClaudeHook {
+        #[arg(
+            long,
+            help = "Передать замаскированный запрос модели (фоновый обработчик asyncRewake)"
+        )]
+        forward_prompt: bool,
+        #[arg(long, help = "Файл политики распознавания")]
+        policy: Option<PathBuf>,
+        #[arg(long, help = "Каталог зашифрованного состояния")]
+        state_directory: Option<PathBuf>,
+    },
+
     /// Замаскировать текст в указанном сеансе
     Mask {
         #[arg(long, help = "Идентификатор сеанса")]
@@ -86,6 +99,19 @@ enum Command {
         login: bool,
         #[arg(long, help = "Рабочий каталог в формате hex")]
         cwd_hex: Option<String>,
+        #[arg(long, help = "Каталог зашифрованного состояния")]
+        state_directory: Option<PathBuf>,
+        #[arg(long, help = "Предельное время выполнения в миллисекундах")]
+        timeout_ms: Option<u64>,
+    },
+    /// Создать плагин Claude Code
+    PackageClaude {
+        #[arg(
+            long,
+            default_value = "dist/sanctum-claude",
+            help = "Новый каталог для пакета"
+        )]
+        output: PathBuf,
     },
     /// Создать пакет интеграции Desktop
     PackagePortless {
@@ -196,11 +222,17 @@ fn run(command: Command) -> Result<()> {
             shell,
             login,
             cwd_hex,
+            state_directory,
+            timeout_ms,
         } => {
             let policy = std::env::var_os("SANCTUM_GUARD_POLICY")
                 .map(PathBuf::from)
                 .or(policy);
-            let vault = sanctum::vault::Vault::new(sanctum::vault::Vault::default_directory()?)?;
+            let vault = sanctum::vault::Vault::new(
+                state_directory
+                    .map(Ok)
+                    .unwrap_or_else(sanctum::vault::Vault::default_directory)?,
+            )?;
             let code = sanctum::local_command::run_with_options(
                 &vault,
                 &session,
@@ -209,6 +241,9 @@ fn run(command: Command) -> Result<()> {
                 shell.as_deref(),
                 login,
                 cwd_hex.as_deref(),
+                timeout_ms
+                    .map(std::time::Duration::from_millis)
+                    .unwrap_or(sanctum::local_command::DEFAULT_TIMEOUT),
             )?;
             std::process::exit(code);
         }
@@ -253,6 +288,54 @@ fn run(command: Command) -> Result<()> {
                 Err(_) => print_json(&sanctum::tool_guard::failure(event.as_ref()))?,
             }
         }
+        Command::ClaudeHook {
+            forward_prompt,
+            policy,
+            state_directory,
+        } => {
+            let raw = input();
+            let event = raw.as_ref().ok().and_then(|s| json::parse(s).ok());
+            if !sanctum::settings::active() {
+                return Ok(());
+            }
+            let operation = || -> Result<Option<serde_json::Value>> {
+                let event = event.as_ref().ok_or(Error("invalid_hook"))?;
+                let path = std::env::var_os("SANCTUM_GUARD_POLICY")
+                    .map(PathBuf::from)
+                    .or(policy);
+                let vault = sanctum::vault::Vault::new(
+                    state_directory
+                        .clone()
+                        .map(Ok)
+                        .unwrap_or_else(sanctum::vault::Vault::default_directory)?,
+                )?;
+                let policy = setup::load_policy(path.as_deref())?;
+                if forward_prompt {
+                    if let Some(masked) =
+                        sanctum::claude_hook::masked_prompt(event, policy, &vault)?
+                    {
+                        io::stderr()
+                            .write_all(masked.as_bytes())
+                            .map_err(|_| Error("stderr_write_failed"))?;
+                        std::process::exit(2);
+                    }
+                    return Ok(None);
+                }
+                let runner = sanctum::claude_hook::Runner {
+                    executable: std::env::current_exe()
+                        .map_err(|_| Error("binary_location_failed"))?,
+                    policy: path.clone(),
+                    state_directory,
+                };
+                sanctum::claude_hook::handle(event, policy, &vault, &runner)
+            };
+            match operation() {
+                Ok(Some(value)) => print_json(&value)?,
+                Ok(None) => {}
+                Err(_) if forward_prompt => {}
+                Err(_) => print_json(&sanctum::claude_hook::failure(event.as_ref()))?,
+            }
+        }
         Command::Mask {
             session,
             policy,
@@ -285,6 +368,10 @@ fn run(command: Command) -> Result<()> {
             )?
             .forget(&session)?;
             println!("Соответствия сеанса удалены с устройства.");
+        }
+        Command::PackageClaude { output } => {
+            setup::package_claude(&output)?;
+            println!("Плагин Claude Code создан в {}", output.display());
         }
         Command::PackagePortless { output } => {
             setup::package_portless(&output)?;

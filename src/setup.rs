@@ -259,6 +259,71 @@ pub fn package_prompt_guard(output: &Path) -> Result<()> {
     result
 }
 
+pub fn package_claude(output: &Path) -> Result<()> {
+    let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|_| Error("package_parent_failed"))?;
+    }
+    fs::create_dir(output).map_err(|_| Error("package_output_must_be_new"))?;
+    let result = (|| {
+        let plugin = output.join("plugin");
+        for dir in [
+            plugin.join(".claude-plugin"),
+            plugin.join("hooks"),
+            plugin.join("bin"),
+            output.join(".claude-plugin"),
+        ] {
+            fs::create_dir_all(dir).map_err(|_| Error("package_directory_failed"))?;
+        }
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../plugins/sanctum-claude/.claude-plugin/plugin.json"
+        ))
+        .map_err(|_| Error("package_encode_failed"))?;
+        let marketplace = serde_json::json!({"name":"sanctum-local","owner":{"name":"Sanctum"},
+            "plugins":[{"name":"sanctum-claude","source":"./plugin","description":manifest["description"],
+                "version":crate::VERSION,"category":"security"}]});
+        for (path, data) in [
+            (
+                plugin.join("hooks/hooks.json"),
+                include_str!("../plugins/sanctum-claude/hooks/hooks.json"),
+            ),
+            (
+                plugin.join(".claude-plugin/plugin.json"),
+                include_str!("../plugins/sanctum-claude/.claude-plugin/plugin.json"),
+            ),
+        ] {
+            fs::write(path, data).map_err(|_| Error("package_write_failed"))?;
+        }
+        for (path, data) in [
+            (
+                plugin.join("policy.json"),
+                serde_json::json!({"literals":[],"max_entries":10000}),
+            ),
+            (output.join(".claude-plugin/marketplace.json"), marketplace),
+        ] {
+            fs::write(
+                path,
+                serde_json::to_vec_pretty(&data).map_err(|_| Error("package_encode_failed"))?,
+            )
+            .map_err(|_| Error("package_write_failed"))?;
+        }
+        let destination = plugin
+            .join("bin")
+            .join(crate::platform::executable("sanctum-guard"));
+        fs::copy(executable, &destination).map_err(|_| Error("package_binary_copy_failed"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(destination, fs::Permissions::from_mode(0o755))
+                .map_err(|_| Error("package_binary_mode_failed"))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(output);
+    }
+    result
+}
 pub fn package_portless(output: &Path) -> Result<()> {
     let executable = std::env::current_exe().map_err(|_| Error("binary_location_failed"))?;
     let adapter = executable

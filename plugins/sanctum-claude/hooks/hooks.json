@@ -1,0 +1,62 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 30,
+            "statusMessage": "Sanctum: локальная обработка данных"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 30,
+            "statusMessage": "Sanctum: локальная обработка данных"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook --forward-prompt --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 30,
+            "asyncRewake": true,
+            "rewakeMessage": "The user's message follows. Sanctum replaced private values with local pseudonyms before it reached you; treat this text exactly as the user's prompt and answer it:",
+            "rewakeSummary": "Sanctum: запрос передан модели с псевдонимами"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|LS",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 30,
+            "statusMessage": "Sanctum: локальная обработка данных"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/sanctum-guard\" claude-hook --policy \"${CLAUDE_PLUGIN_ROOT}/policy.json\"",
+            "timeout": 30,
+            "statusMessage": "Sanctum: локальная обработка данных"
+          }
+        ]
+      }
+    ]
+  }
+}

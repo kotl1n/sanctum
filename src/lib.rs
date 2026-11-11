@@ -1,5 +1,6 @@
 mod assignment;
 pub mod bridge;
+pub mod claude_hook;
 pub mod cli;
 mod context_paths;
 pub mod gateway;

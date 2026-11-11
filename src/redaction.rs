@@ -125,7 +125,7 @@ fn detectors() -> &'static Detectors {
             token: re(r"\[(?:IP|EMAIL|SECRET|KEY|PRIVATE_KEY|CUSTOM|PHONE|PERSON|DOCUMENT|DOMAIN|CARD)-[1-9][0-9]*\]"),
             field: re(&format!(r"(?i)^(?:[a-z0-9]+[_-])*(?:{SECRET_NAME})$")),
             assignment: re(&format!(r#"(?i)(?:^|[^\w])(?:\w+_)?{SECRET_NAME}(?:\\*["'])?\s*(?P<separator>[:=])[ \t]*"#)),
-            email: re(r"[\w.!#$%&'*+/=?^`{|}~-]+@(?:[\w-]+\.)+[\w-]{2,}"),
+            email: re(r"[\w.!#$%&'*+/?^`{|}~-]+@(?:[\w-]+\.)+[\w-]{2,}"),
             ipv4: re(r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"),
             ipv6: re(r"(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:.]*(?:%[\w.-]+)?"),
             pem: re(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
