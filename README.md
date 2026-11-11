@@ -1,22 +1,24 @@
 # Sanctum
 
-Локальная защита текстовых данных в Codex Desktop. Sanctum заменяет обнаруженные приватные значения псевдонимами, хранит соответствия на вашем устройстве и восстанавливает значения для поддерживаемых локальных инструментов.
+[Русская версия](README.ru.md)
 
-**Версия 1.0.0.** Движок и все плагины используют одну версию. Для Linux x86-64 сохранена закреплённая сборка Desktop. Для Windows x64 добавлена экспериментальная поддержка: см. [инструкцию Windows](docs/WINDOWS.md). Для полноценной интеграции нужен проверенный профиль конкретной Windows-сборки. Статус проверок и ограничения: [проверка релиза](docs/RELEASE.md).
+Local protection for text data in Codex Desktop. Sanctum replaces detected private values with pseudonyms, keeps the mappings on your device and restores the values for supported local tools.
 
-## Как это работает
+**Version 1.0.0.** The engine and all plugins share one version. Linux x86-64 has a pinned Desktop build. Windows x64 support is experimental: see the [Windows guide](docs/WINDOWS.md). Full integration requires a verified profile of the specific Windows build. Verification status and limitations: [release verification](docs/RELEASE.md).
 
-- `sanctum-guard` отвечает за предварительный просмотр, маскирование, настройки и восстановление аргументов.
-- `sanctum-codex` соединяет Desktop с серверной частью через стандартные потоки ввода и вывода (stdio).
-- Нативный патч фильтрует запросы к модели, включая инструкции, описания инструментов и историю. Для защиты всего контекста нужны эта серверная часть и запуск приложения через Sanctum.
-- Соответствия сеанса хранятся в зашифрованном виде. На Windows ключ дополнительно защищён DPAPI текущего пользователя. Ключ остаётся на том же устройстве; шифрование не защищает от процесса, который может прочитать ключ. Состояние истекает через 24 часа без успешного обновления.
-- Подсветка поля ввода использует локальный отладочный канал без TCP-порта. Она показывает результат распознавания и сама по себе не подтверждает безопасную фильтрацию запроса.
+## How it works
 
-Детекторы распознают IP-адреса, электронную почту, известные форматы учётных данных, поля паролей и другие структурированные приватные данные. Поддерживаются правила на русском и английском языках. Произвольный секрет может остаться незамеченным; возможны ложные срабатывания. Для специфичных значений проекта добавьте собственную политику. В защищённом режиме вложения и удалённые инструменты ограничиваются или исключаются. При сбое маскирования затронутый контекст заменяется уведомлением о пропуске.
+- `sanctum-guard` handles preview, masking, settings and argument restoration.
+- `sanctum-codex` connects Desktop to the backend over standard input and output (stdio).
+- A native patch filters model requests, including instructions, tool descriptions and history. Protecting the whole context requires this backend and launching the app through Sanctum.
+- Session mappings are stored encrypted. On Windows the key is additionally protected with the current user's DPAPI. The key stays on the same device; encryption does not protect against a process that can read the key. State expires after 24 hours without a successful update.
+- Input field highlighting uses a local debug channel without a TCP port. It shows what was detected and does not by itself confirm that the request was filtered safely.
 
-## Сборка и проверка
+Detectors recognize IP addresses, email addresses, known credential formats, password fields and other structured private data. Rules cover Russian and English. An arbitrary secret may go unnoticed, and false positives are possible. Add your own policy for project-specific values. In protected mode, attachments and remote tools are restricted or excluded. If masking fails, the affected context is replaced with an omission notice.
 
-Требуются Rust 1.88+, Python 3.11+, Node.js 22+ и Git. Ниже приведены команды для Linux x86-64. Команды Windows и экспериментальные ограничения описаны в [инструкции Windows](docs/WINDOWS.md). Для загрузки закреплённых исходников upstream нужен доступ к сети.
+## Building and testing
+
+Requires Rust 1.88+, Python 3.11+, Node.js 22+ and Git. The commands below are for Linux x86-64. Windows commands and experimental limitations are in the [Windows guide](docs/WINDOWS.md). Downloading the pinned upstream sources requires network access.
 
 ```sh
 cargo fmt --all -- --check
@@ -27,21 +29,21 @@ node --test tests/composer-host.test.cjs
 python3 scripts/build_release.py --jobs 2
 ```
 
-Сборщик заменяет персональные пути сборки и проверяет их отсутствие в исполняемых файлах. Python используется для установки и упаковки; основной код работает на Rust.
+The builder replaces personal build paths and checks that none remain in the executables. Python is used for installation and packaging; the core runs in Rust.
 
-Тесты и необходимые скрипты сборки, установки и управления сохранены в репозитории и архиве исходников для воспроизводимой проверки релиза. Установленный плагин не запускает тесты. Старый Python-прототип, черновики, устаревшие диагностические скрипты и генератор оформления удалены.
+Tests and the required build, install and management scripts are kept in the repository and the source archive for reproducible release verification. The installed plugin does not run tests.
 
-## Проверка без Desktop
+## Trying it without Desktop
 
-На Linux запустите `target/release/sanctum-guard preview` и передайте пример текста через стандартный ввод. На Windows после сборки используйте `target/release/sanctum-guard.exe preview`. Предварительный просмотр не сохраняет соответствия. Для обратимого маскирования используйте `sanctum redact --vault PATH` и `sanctum restore --vault PATH` (на Windows — `sanctum.exe`), также со стандартным вводом.
+On Linux, run `target/release/sanctum-guard preview` and pipe sample text to standard input. On Windows, use `target/release/sanctum-guard.exe preview` after building. Preview does not store mappings. For reversible masking, use `sanctum redact --vault PATH` and `sanctum restore --vault PATH` (`sanctum.exe` on Windows), also with standard input.
 
-Файл CLI `--vault` содержит **незашифрованные соответствия в JSON** и создаётся с правами `0600` на Unix, а на Windows получает приватную DACL. Это отдельный механизм, не зашифрованное хранилище Desktop. Храните файл локально и удалите после использования. Не добавляйте в Git хранилища, ключи, настройки аккаунта или политики с секретами.
+The CLI `--vault` file holds **unencrypted mappings as JSON**. It is created with `0600` permissions on Unix and a private DACL on Windows. This is a separate mechanism, not the encrypted Desktop store. Keep the file local and delete it after use. Do not commit vaults, keys, account settings or policies containing secrets to Git.
 
-Политики поддерживают поля `literals`, `patterns`, `internal_domains`, `personal_names` и `max_entries`. Пример: [examples/policy.json](examples/policy.json). Используйте `--policy` или переменную `SANCTUM_GUARD_POLICY` для Desktop.
+Policies support the `literals`, `patterns`, `internal_domains`, `personal_names` and `max_entries` fields. Example: [examples/policy.json](examples/policy.json). Use `--policy`, or the `SANCTUM_GUARD_POLICY` variable for Desktop.
 
-## Сборка комплекта для Desktop
+## Building the Desktop bundle
 
-Нативная интеграция закреплена на Codex **0.159.0**. Коммит, протокол контекста и контрольные суммы указаны в [манифесте](native/codex-0.159.0-context/manifest.json). Версия upstream и идентификатор протокола независимы от версии Sanctum. Следующие команды используют закреплённый профиль Linux x86-64; для Windows сначала нужен отдельный [профиль настоящей сборки Desktop](docs/WINDOWS.md).
+The native integration is pinned to Codex **0.159.0**. The commit, context protocol and checksums are listed in the [manifest](native/codex-0.159.0-context/manifest.json). The upstream version and protocol identifier are independent of the Sanctum version. The following commands use the pinned Linux x86-64 profile; Windows first needs a separate [profile of the real Desktop build](docs/WINDOWS.md).
 
 ```sh
 python3 scripts/build_native_backend.py --prepare-only
@@ -49,41 +51,41 @@ python3 scripts/build_native_backend.py --jobs 2 --code-mode-host /path/to/offic
 python3 scripts/package_release.py --backend dist/sanctum-context-backend --output dist/sanctum-1.0.0
 ```
 
-Для сборки upstream также нужны Rust 1.95+, инструменты C/C++, CMake, pkg-config и заголовочные файлы OpenSSL. Официальный вспомогательный процесс code-mode должен совпадать с контрольной суммой в манифесте. Полная сборка занимает существенно больше времени, чем сборка одного Sanctum.
+Building upstream also requires Rust 1.95+, C/C++ tools, CMake, pkg-config and OpenSSL headers. The official code-mode helper must match the checksum in the manifest. A full build takes much longer than building Sanctum alone.
 
-Для проверки упаковки, установки, маскирования, восстановления, инициализации нативного app-server и удаления во временном домашнем каталоге замените последнюю команду на:
+To verify packaging, installation, masking, restoration, native app-server initialization and removal in a temporary home directory, replace the last command with:
 
 ```sh
 python3 tests/smoke_bundle.py --backend dist/sanctum-context-backend --output dist/sanctum-1.0.0-check
 ```
 
-Выходной каталог должен быть новым. Проверка не отправляет запрос к модели и не меняет ваш профиль Desktop. Установленные компоненты Desktop должны соответствовать профилю совместимости.
+The output directory must be new. The check sends no request to the model and does not change your Desktop profile. Installed Desktop components must match the compatibility profile.
 
-Комплект включает исполняемые файлы, лицензии, исходники Sanctum и закреплённого upstream, нативный патч и `SHA256SUMS`. Контрольные суммы подтверждают целостность, но не личность издателя. Файл `native/desktop-compatibility.json` служит шаблоном для Desktop **26.928.20755**. Контрольные суммы плагина, интерфейса и серверной части формируются для каждой сборки. После обновления Desktop нужны проверка совместимости и новый профиль.
+The bundle includes executables, licenses, Sanctum and pinned upstream sources, the native patch and `SHA256SUMS`. Checksums confirm integrity, not the publisher's identity. `native/desktop-compatibility.json` is a template for Desktop **26.928.20755**. Plugin, UI and backend checksums are generated for each build. After a Desktop update, a compatibility check and a new profile are needed.
 
-## Установка и включение
+## Installing and enabling
 
-Следующие пути и команды относятся к Linux. Для Windows используйте [отдельную инструкцию](docs/WINDOWS.md). Распакуйте проверенный комплект. Сначала изучите план, затем примените его:
+The paths and commands below are for Linux. For Windows, follow the [separate guide](docs/WINDOWS.md). Unpack the verified bundle. Review the plan first, then apply it:
 
 ```sh
 python3 dist/sanctum-1.0.0/install.py install --bundle dist/sanctum-1.0.0
 python3 dist/sanctum-1.0.0/install.py install --bundle dist/sanctum-1.0.0 --apply
 ```
 
-Установщик создаёт `~/.local/bin/sanctum-desktop` и отдельный ярлык Desktop. Защита остаётся выключенной. Установщик не регистрирует плагин и не выдаёт доверие обработчикам событий (хукам). Установите каталог `plugin/` из комплекта через предусмотренный вашей сборкой Desktop механизм локальных плагинов, затем проверьте и разрешите хуки. Каталог `.agents/plugins/marketplace.json` создаётся внутри комплекта при упаковке; исходный репозиторий не предназначен для установки как готовый плагин. После изменения определений требуется новая проверка доверия.
+The installer creates `~/.local/bin/sanctum-desktop` and a separate Desktop shortcut. Protection stays off. The installer does not register the plugin or grant trust to hooks. Install the bundle's `plugin/` directory through your Desktop build's local plugin mechanism, then review and allow the hooks. `.agents/plugins/marketplace.json` is created inside the bundle during packaging; the source repository is not meant to be installed as a ready plugin. Changing the definitions requires a new trust review.
 
-Проверьте совместимость и включите защиту:
+Check compatibility and enable protection:
 
 ```sh
 python3 ~/.codex/plugins/cache/sanctum-portless-dev/sanctum-portless/1.0.0/ui/manage_backend.py check
 python3 ~/.codex/plugins/cache/sanctum-portless-dev/sanctum-portless/1.0.0/ui/manage_backend.py enable --apply
 ```
 
-Для отключения используется `disable --apply`. После установки или переключения серверной части полностью перезапустите Desktop через Sanctum. Перед обновлением отключите защиту менеджером текущей установки. Установщик 1.0.0 использует отдельный каталог версии плагина и сохраняет историю транзакций для восстановления.
+Use `disable --apply` to turn it off. After installing or switching the backend, fully restart Desktop through Sanctum. Before upgrading, disable protection with the current installation's manager. Installer 1.0.0 uses a separate plugin version directory and keeps a transaction history for recovery.
 
-## Удаление и откат
+## Removal and rollback
 
-Пример для Linux; на Windows запускайте тот же `install.py` через `python` из каталога вашего комплекта.
+Linux example; on Windows, run the same `install.py` with `python` from your bundle directory.
 
 ```sh
 python3 dist/sanctum-1.0.0/install.py uninstall
@@ -91,20 +93,20 @@ python3 dist/sanctum-1.0.0/install.py uninstall --apply
 python3 dist/sanctum-1.0.0/install.py rollback --transaction transaction-EXAMPLE.json
 ```
 
-Применённая операция возвращает имя транзакции. Прерванные транзакции восстанавливаются при следующем запуске установщика. Изменённые настройки и политики сохраняются при удалении; изменённые программные файлы вызывают конфликт и не перезаписываются. Зашифрованное состояние сеансов также остаётся на устройстве. Для удаления соответствий сеанса используйте `sanctum-guard forget`. Установка и удаление не меняют настройки аккаунта.
+An applied operation returns the transaction name. Interrupted transactions are recovered on the next installer run. Modified settings and policies are kept on removal; modified program files cause a conflict and are not overwritten. Encrypted session state also stays on the device. Use `sanctum-guard forget` to delete session mappings. Installation and removal do not change account settings.
 
 ## Claude Code
 
-Плагин `sanctum-privacy` работает в Claude Code только через хуки, без прокси и сетевого порта. Модель получает псевдонимы вместо приватных данных в запросах и выводе инструментов, а локальные инструменты работают с исходными значениями. Сборка: `sanctum-guard package-claude --output dist/sanctum-privacy`, затем `/plugin marketplace add` и `/plugin install sanctum-privacy@sanctum-local`. Подробности и ограничения: [Sanctum для Claude Code](docs/CLAUDE_CODE.md).
+The `sanctum-privacy` plugin works in Claude Code through hooks only, without a proxy or network port. The model receives pseudonyms instead of private data in prompts and tool output, while local tools work with the original values. Build it with `sanctum-guard package-claude --output dist/sanctum-privacy`, then run `/plugin marketplace add` and `/plugin install sanctum-privacy@sanctum-local`. Details and limitations (in Russian): [Sanctum for Claude Code](docs/CLAUDE_CODE.md).
 
-## Другие компоненты
+## Other components
 
-Исполняемый файл `sanctum` содержит только команды `redact` и `restore` для маскирования текста из стандартного ввода (см. «Проверка без Desktop»). Sanctum не открывает сетевых портов: интеграция Desktop — `sanctum-portless` с проверенной нативной серверной частью, интеграция Claude Code — плагин `sanctum-privacy`.
+The `sanctum` executable only provides the `redact` and `restore` commands for masking text from standard input (see "Trying it without Desktop"). Sanctum opens no network ports: the Desktop integration is `sanctum-portless` with the verified native backend, and the Claude Code integration is the `sanctum-privacy` plugin.
 
-## Язык и лицензия
+## Language and license
 
-Пользовательские описания, справка и сообщения Sanctum переведены на русский. Имена команд, поля JSON, коды ошибок, идентификаторы протоколов и инструкции модели сохраняют исходные обозначения для совместимости. Оригиналы лицензий сохраняются без перевода.
+User-facing descriptions, help and messages in Sanctum are in Russian; the remaining documentation in `docs/` is in Russian as well. Command names, JSON fields, error codes, protocol identifiers and model instructions keep their original names for compatibility. License texts are kept untranslated.
 
-Copyright (C) 2026 Sanctum contributors. Sanctum распространяется по [GNU GPL версии 3, только этой версии](LICENSE), без гарантий. При распространении производной работы нужно сохранять уведомления об авторских правах и предоставлять соответствующие исходники по GPLv3. Продажа копий разрешена; распространение закрытой производной работы — нет.
+Copyright (C) 2026 Sanctum contributors. Sanctum is distributed under the [GNU GPL version 3, that version only](LICENSE), without warranty. When distributing a derivative work you must keep the copyright notices and provide the corresponding sources under GPLv3. Selling copies is allowed; distributing a closed derivative work is not.
 
-Код upstream и сторонних зависимостей сохраняет собственные лицензии. См. [NOTICE](NOTICE) и оригинальные файлы лицензии и уведомлений upstream в каталоге `native`.
+Upstream and third-party code keeps its own licenses. See [NOTICE](NOTICE) and the original upstream license and notice files in the `native` directory.

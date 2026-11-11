@@ -29,7 +29,7 @@ def release_version():
 def source_archive(root, output):
     # Explicit source roots keep local credentials, build outputs and Git
     # history out of the distributable while including uncommitted sources.
-    roots = ('Cargo.toml', 'Cargo.lock', 'README.md', 'CHANGELOG.md', 'LICENSE', 'NOTICE',
+    roots = ('Cargo.toml', 'Cargo.lock', 'README.md', 'README.ru.md', 'CHANGELOG.md', 'LICENSE', 'NOTICE',
              '.gitignore', '.gitattributes', '.github', 'docs', 'examples', 'native', 'plugins',
              'scripts', 'src', 'tests', 'ui')
     names = subprocess.check_output(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=root)
@@ -78,14 +78,16 @@ def package(backend, output, native_source=None, profile_path=None):
         subprocess.run([str(ROOT / 'target/release' / executable('sanctum-guard')), 'package-claude', '--output', str(output / 'claude')], check=True)
         if load(output / 'claude/plugin/.claude-plugin/plugin.json')['version'] != version:
             raise ValueError('packaged_claude_plugin_version_mismatch')
-        for name in ('LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md'):
+        for name in ('LICENSE', 'NOTICE', 'README.md', 'README.ru.md', 'CHANGELOG.md'):
             shutil.copy2(ROOT / name, output / name)
         for name in ('docs', 'examples', 'native'):
             shutil.copytree(ROOT / name, output / name)
-        readme = output / 'README.md'
-        readme.write_text('> Это исполняемый комплект. Для сборки из исходников распакуйте '
-                          '`sanctum-source.tar.gz` и перейдите в каталог `sanctum/`.\n\n'
-                          + readme.read_text(encoding="utf-8"), encoding="utf-8")
+        for name, note in (('README.md', '> This is a binary bundle. To build from source, unpack '
+                                         '`sanctum-source.tar.gz` and enter the `sanctum/` directory.'),
+                           ('README.ru.md', '> Это исполняемый комплект. Для сборки из исходников распакуйте '
+                                            '`sanctum-source.tar.gz` и перейдите в каталог `sanctum/`.')):
+            readme = output / name
+            readme.write_text(note + '\n\n' + readme.read_text(encoding="utf-8"), encoding="utf-8")
         source_archive(ROOT, output / 'sanctum-source.tar.gz')
         subprocess.run(['git', 'archive', '--format=tar.gz', '--prefix=codex/',
                         '--output=' + str(output / 'codex-upstream-source.tar.gz'), manifest['commit']],
